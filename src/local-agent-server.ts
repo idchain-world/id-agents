@@ -21,6 +21,7 @@ import fetch from 'node-fetch';
 import { mkdirSync, existsSync } from 'fs';
 import path from 'path';
 import net from 'net';
+import { pathToFileURL } from 'node:url';
 import {
   getDefaultModelForRuntime,
   getRuntimeDisplayName,
@@ -461,8 +462,12 @@ Examples:
   process.on('exit', () => clearInterval(heartbeat));
 }
 
-// Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run if called directly. Compare via pathToFileURL so paths containing
+// characters that get percent-encoded in a file URL (e.g. the space in
+// "/Applications/ID Agents Dashboard.app") still match — a hand-built
+// `file://${process.argv[1]}` does not encode them, so main() would be
+// silently skipped and the agent process would exit 0 without starting.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error('Fatal error:', error);
     process.exit(1);

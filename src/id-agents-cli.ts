@@ -6,6 +6,7 @@
  */
 
 import fetch from 'node-fetch';
+import { pathToFileURL } from 'node:url';
 
 const MANAGER_URL = process.env.ID_MANAGER_URL || 'http://localhost:3100';
 
@@ -233,8 +234,9 @@ Examples:
   }
 }
 
-// Run CLI if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run CLI if executed directly. Use pathToFileURL so paths with characters
+// that percent-encode in a file URL (e.g. spaces) still match import.meta.url.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
 
