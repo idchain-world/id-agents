@@ -1,6 +1,6 @@
 {
   "name": "id-agents",
-  "version": "0.1.103-beta",
+  "version": "0.1.104-beta",
   "description": "Multi-agent orchestration platform with REST-AP interfaces",
   "type": "module",
   "main": "dist/index.js",
