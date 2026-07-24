@@ -48,6 +48,10 @@ export const CLAUDE_MODELS = {
 export function modelDisplayName(model: string): string {
   return model.includes('haiku') ? 'Haiku 4.5 (Cheap)' :
          model.includes('sonnet') ? 'Sonnet 4 (Balanced)' :
+         // Must precede the generic `opus` arm, which would otherwise label
+         // Opus 5 as "Opus 4 (Premium)". Matches `claude-opus-5` and any future
+         // dated snapshot; `claude-opus-4-5-…` does not contain `opus-5`.
+         model.includes('opus-5') ? 'Opus 5' :
          model.includes('opus') ? 'Opus 4 (Premium)' :
          model.includes('fable') ? 'Fable 5' :
          model.includes('mythos') ? 'Mythos 5' : model;

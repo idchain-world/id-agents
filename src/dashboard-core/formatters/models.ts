@@ -13,6 +13,7 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'claude-opus-4-6': 'opus-4-6',
   'claude-opus-4-7': 'opus-4-7',
   'claude-opus-4-8': 'opus-4.8',
+  'claude-opus-5': 'opus-5',
   'claude-sonnet-4-5-20250514': 'sonn-4-5',
   'claude-sonnet-4-6': 'sonn-4-6',
   'claude-sonnet-5': 'sonn-5',
@@ -33,6 +34,7 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
 
   // Cursor / Composer
   'composer-2': 'comp-2',
+  'grok-4.5': 'grok-4.5',
 };
 
 /**

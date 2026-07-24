@@ -16,6 +16,26 @@ describe('model alias resolution', () => {
     expect(resolveModelAlias('mythos-5')).toBe('claude-mythos-5');
   });
 
+  it('resolves the opus-5 aliases to the canonical model id', () => {
+    expect(resolveModelAlias('opus-5')).toBe('claude-opus-5');
+    expect(resolveModelAlias('opus5')).toBe('claude-opus-5');
+    expect(resolveModelAlias('OPUS-5')).toBe('claude-opus-5');
+    // Idempotent: the canonical id passes through unchanged.
+    expect(resolveModelAlias('claude-opus-5')).toBe('claude-opus-5');
+  });
+
+  it('resolves the grok aliases to the Cursor CLI model id', () => {
+    expect(resolveModelAlias('grok')).toBe('grok-4.5');
+    expect(resolveModelAlias('grok-4.5')).toBe('grok-4.5');
+    expect(resolveModelAlias('grok-4-5')).toBe('grok-4.5');
+    expect(resolveModelAlias('GROK')).toBe('grok-4.5');
+  });
+
+  it('does not let opus-5 shadow the older opus aliases', () => {
+    expect(resolveModelAlias('opus')).toBe('claude-opus-4-5-20250514');
+    expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
+  });
+
   it('is case-insensitive', () => {
     expect(resolveModelAlias('Fable')).toBe('claude-fable-5');
     expect(resolveModelAlias('FABLE-5')).toBe('claude-fable-5');
@@ -55,6 +75,14 @@ describe('model display labels', () => {
     expect(modelDisplayName('anthropic/claude-mythos-5-project')).toBe('Mythos 5');
   });
 
+  it('labels opus 5 distinctly from the opus 4 family', () => {
+    expect(modelDisplayName('claude-opus-5')).toBe('Opus 5');
+    // The generic `opus` arm must not swallow it, and `opus-4-5` must not
+    // accidentally match the `opus-5` substring.
+    expect(modelDisplayName('claude-opus-4-5-20250514')).toBe('Opus 4 (Premium)');
+    expect(modelDisplayName('claude-opus-4-8')).toBe('Opus 4 (Premium)');
+  });
+
   it('preserves existing model labels (regression)', () => {
     expect(modelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5 (Cheap)');
     expect(modelDisplayName('claude-sonnet-4-20250514')).toBe('Sonnet 4 (Balanced)');
@@ -70,6 +98,11 @@ describe('TUI model abbreviations', () => {
   it('abbreviates fable and mythos model ids', () => {
     expect(abbrevModel('claude-fable-5')).toBe('fable-5');
     expect(abbrevModel('claude-mythos-5')).toBe('myth-5');
+  });
+
+  it('abbreviates opus 5 and the Cursor grok model id', () => {
+    expect(abbrevModel('claude-opus-5')).toBe('opus-5');
+    expect(abbrevModel('grok-4.5')).toBe('grok-4.5');
   });
 });
 
