@@ -100,6 +100,7 @@ const __dirname = path.dirname(__filename);
 // Model alias resolution (canonical source in core/model-aliases.ts;
 // re-exported here for back-compat with existing import sites).
 import { MODEL_ALIASES, resolveModelAlias } from './core/model-aliases.js';
+import { configNotFoundError, resolveConfigPath, type ConfigLookup } from './core/config-paths.js';
 export { MODEL_ALIASES, resolveModelAlias };
 
 function tokenizeCommand(command: string): string[] {
@@ -431,6 +432,16 @@ export class AgentManagerDb {
     if (!existsSync(managerDir)) mkdirSync(managerDir, { recursive: true });
 
     this.setupRoutes();
+  }
+
+  /** Resolve a config path against every plausible root. See core/config-paths. */
+  private resolveConfigPath(filePath: string): ConfigLookup {
+    return resolveConfigPath(filePath, { baseWorkDir: this.baseWorkDir });
+  }
+
+  /** Error text for a config lookup that missed, naming every path tried. */
+  private configNotFoundError(filePath: string, searched: string[]): string {
+    return configNotFoundError(filePath, searched);
   }
 
   /**
@@ -5434,10 +5445,32 @@ export class AgentManagerDb {
         }
 
         const talkResult = await talkResp.json() as any;
+        const askQueryId = talkResult.query_id || talkResult.queryId;
+
+        // Persist the query before handing its id back. Agent processes hold no
+        // database handle, so a query dispatched from here would otherwise live
+        // only in the target agent's memory: the manager's own `GET /query/:id`
+        // would 404 forever and the documented dispatch-then-poll loop could
+        // never resolve. The shared `/message` + `/talk-to` handler has always
+        // recorded this row; the `/ask` command path never did.
+        //
+        // Best-effort: the message is already delivered at this point, so a
+        // write failure must not turn a successful dispatch into an error.
+        if (askQueryId) {
+          try {
+            await this.db.queries.create(teamId, askQueryId, a.id, message, Date.now());
+          } catch (err: any) {
+            console.error(
+              `[Manager] Delivered query ${askQueryId} to ${agentName} but failed to persist it:`,
+              err?.message || err,
+            );
+          }
+        }
+
         return {
           ok: true,
           result: {
-            queryId: talkResult.query_id || talkResult.queryId,
+            queryId: askQueryId,
             status: 'processing',
             agent: agentName
           }
@@ -5521,10 +5554,11 @@ export class AgentManagerDb {
           syncFilePath = `${syncFilePath}.yaml`;
         }
 
-        const syncAbsolutePath = path.resolve(process.cwd(), syncFilePath);
-        if (!existsSync(syncAbsolutePath)) {
-          return { ok: false, error: `Config file not found: ${syncFilePath}` };
+        const syncLookup = this.resolveConfigPath(syncFilePath);
+        if (!syncLookup.resolved) {
+          return { ok: false, error: this.configNotFoundError(syncFilePath, syncLookup.searched) };
         }
+        const syncAbsolutePath = syncLookup.resolved;
 
         const syncDeployArgs = syncFilteredArgs.slice(1);
         const { agents: syncAgents, errors: syncErrors, teamName: syncConfigTeam, org: syncOrg, calendar: syncCalendar } =
@@ -5942,24 +5976,25 @@ export class AgentManagerDb {
           filePath = `${filePath}.yaml`;
         }
 
-        // Resolve to absolute path
-        let absolutePath = path.resolve(process.cwd(), filePath);
+        // Resolve against every plausible config root, not just the manager's cwd
+        const deployLookup = this.resolveConfigPath(filePath);
+        let absolutePath = deployLookup.resolved ?? '';
 
         // Parse config with provided parameters
         let deployArgs = filteredArgs.slice(1);
 
         // If config doesn't exist, fall back to default.yaml with the arg as the name
-        if (!existsSync(absolutePath)) {
-          const defaultPath = path.resolve(process.cwd(), 'configs/default.yaml');
-          if (existsSync(defaultPath)) {
+        if (!deployLookup.resolved) {
+          const defaultLookup = this.resolveConfigPath('configs/default.yaml');
+          if (defaultLookup.resolved) {
             console.log(`[Deploy] Config not found: ${filePath}, using default.yaml with name=${originalArg}`);
-            absolutePath = defaultPath;
+            absolutePath = defaultLookup.resolved;
             // Prepend the original arg as name parameter if not already specified
             if (!deployArgs.some(a => a.startsWith('name='))) {
               deployArgs = [originalArg, ...deployArgs];
             }
           } else {
-            return { ok: false, error: `Config file not found: ${filePath}` };
+            return { ok: false, error: this.configNotFoundError(filePath, deployLookup.searched) };
           }
         }
         const preflight = await this.buildDeployPreflightSummary(teamId, teamName, absolutePath, deployArgs);
