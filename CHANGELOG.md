@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.1.106-beta
+
+### Fixed — `/ask` queries are recorded, and configs resolve outside the manager's cwd
+
+- **`/ask` returned a query id that was never persisted.** The `/remote` `/ask` command handler POSTed to the target agent's `/talk` and handed back the returned `query_id` without recording the row. Agent processes hold no database handle, so the query existed only in the target agent's memory and the manager's own `GET /query/:id` returned 404 indefinitely — the documented dispatch-then-poll loop could never resolve. The shared `/message` + `/talk-to` handler has always written this row; the `/ask` path never did, going back to `0.1.0-beta`. It stayed hidden because `/remote` is an automation-only surface: the TUI, agent-to-agent traffic, and heartbeats all route through handlers that do persist. The write is best-effort, since the message is already delivered by that point.
+- **`/sync` and `/deploy` only looked in `process.cwd()`.** That holds while the manager is spawned from a checkout, but when the desktop app owns the daemon its cwd is its own Application Support directory, so `/sync <team>` failed with "Config file not found" even though the file existed in the user's repo. Resolution now walks `ID_AGENTS_CONFIG_ROOT`, `process.cwd()`, the manager base work dir, then `~/.id-agents`. `cwd` is still tried ahead of the new fallbacks so repo-spawned managers behave exactly as before, and the override is opt-in, so no existing setup changes behaviour. An absolute path is treated as a direct instruction and never searched around. A miss now names every candidate it tried.
+- Resolution is extracted to `src/core/config-paths.ts` so it is unit-testable without standing up a manager.
+
+### Added — Opus 5 and Cursor Grok 4.5 short names
+
+- **`model-aliases`**: `opus-5` / `opus5` → `claude-opus-5`, and `grok` / `grok-4.5` / `grok-4-5` → `grok-4.5`. Alias resolution runs before the model is stored by `/model` and the `cursor-cli` harness passes the stored value straight to `--model`, so non-Claude ids resolve correctly for every runtime. The bare `opus` alias is unchanged.
+- **`dashboard-core` formatters**: abbreviate `claude-opus-5` as `opus-5` and register `grok-4.5`, so the TUI MODEL column stops overflowing.
+- **`modelDisplayName`** matches `opus-5` ahead of the generic `opus` arm, which would otherwise label Opus 5 as "Opus 4 (Premium)".
+
+## 0.1.105-beta
+
+### Fixed — agents failed to start from an install path containing spaces
+
+- **ESM main-module guard.** `local-agent-server.ts` and `id-agents-cli.ts` compared `import.meta.url` against a hand-built `` `file://${process.argv[1]}` ``, which does not percent-encode. Any install path containing a character that encodes in a file URL — notably the space in `/Applications/ID Agents Dashboard.app` — failed the comparison, so `main()` was silently skipped and the agent process exited 0 without ever starting. Both now compare via `pathToFileURL(process.argv[1]).href`.
+
 ## 0.1.104-beta
 
 ### Added — agent profiles (bio + handles)
