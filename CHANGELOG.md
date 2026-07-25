@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.107-beta
+
+### Improved — checkins guidance for dispatcher agents
+
+- **Mandatory checkin reminder**: added prominent warning that every delegated task MUST include both a task definition and a tuned checkin interval. Skipping checkins causes silent work stalls; skipping interval tuning causes dispatcher burnout from false alarms.
+- **Interval-picking guidance moved earlier**: moved the "Picking the right interval" section to immediately after the auto-attach example, so dispatchers see it before making tuning decisions.
+- **Enhanced "Why this exists"**: clarified the cost of skipped checkins (invisible blocked work) and poor intervals (loss of supervision when ignored).
+- **Documentation only — no API changes.**
+
 ## 0.1.106-beta
 
 ### Fixed — `/ask` queries are recorded, and configs resolve outside the manager's cwd
