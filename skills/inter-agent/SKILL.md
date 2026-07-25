@@ -245,13 +245,17 @@ checkin firing against a phantom row.
 
 ## Checkins (work supervision)
 
+> ⚠️ **MANDATORY: Every delegated task MUST have a checkin with a reasonable interval.** If you create a task via `/talk-to`, you MUST include BOTH `task: {title, name}` AND a tuned `checkin` interval. Skipping checkins is how work silently stalls. Skipping interval tuning is how you drown in false alarms and stop trusting your supervision system.
+
 ### What it is
 
 A **checkin** is a dispatcher-owned watch that pings the dispatcher's inbox at intervals while a delegated task is in progress, and **auto-closes** when the linked task hits a terminal state (e.g. `done`). The dispatcher is whoever delegated the work; the checkin lives in their inbox, not the delegate's. If the delegate finishes fast, the checkin closes silently. If the delegate stalls, the dispatcher gets pinged.
 
 ### When to use it
 
-Use a checkin for any **delegation that creates a manager task**, i.e. a `/talk-to` request that includes `task: {title, name}`. Do NOT attach a checkin to:
+**Use a checkin for EVERY delegation that creates a manager task** — i.e. every `/talk-to` request that includes `task: {title, name}`. This is not optional.
+
+Do NOT attach a checkin to:
 - one-off chats / synchronous Q&A (`/talk-to` without a `task` field)
 - fire-and-forget pings (`/news-to`)
 
@@ -269,11 +273,25 @@ curl -s -X POST "$MANAGER_URL/talk-to" \
     "to": "coder",
     "from": "'$ID_AGENT_ALIAS'",
     "message": "Please implement the X feature and report back when done.",
-    "task": { "title": "Implement X feature", "name": "implement-x" }
+    "task": { "title": "Implement X feature", "name": "implement-x" },
+    "checkin": "10m"
   }'
 ```
 
 > **Important:** the `task: {…}` auto-attach lives on the **manager's** `/talk-to`, not on the local wrapper at `http://localhost:$ID_AGENT_PORT/talk-to`. The local wrapper only forwards `to` / `message` / `from` to the target's `/talk` endpoint and will silently strip the `task` field. To get auto-attach, hit `$MANAGER_URL/talk-to` directly (as shown above).
+
+### Picking the right interval (BEFORE tuning)
+
+Before you tune, understand why intervals matter: **the interval is your estimate of when things should be done**. If you set it too short, every ping is noise and you'll start ignoring them. If you set it too long, a stalled delegate stays invisible for hours.
+
+**The interval should be slightly longer than the expected task duration**, not aggressively short. The first fire is meant to land *after* the work should plausibly be done, so its arrival is a real signal that something is off rather than routine noise.
+
+**Rules of thumb:**
+- Task you expect to take 5 min → set `checkin: "6m"` (or `7m`). First fire = "should be done by now, why isn't it?"
+- Task you expect to take 30 min → set `checkin: "35m"`, `checkin_iters: 3`. Each fire is a meaningful checkpoint, not a buzz.
+- Task with unknown duration (audit, exploration, research) → set the interval to your patience threshold, not your hope. If you'd want to know after 10 min, that's the interval.
+
+**⚠️ Critical:** Aggressive intervals (every 90s on a 5-min task) create noise. Dispatchers learn to ignore noisy checkins, and then you lose visibility entirely when a real stall happens. Conservative intervals (slightly longer than expected) make every fire actionable.
 
 ### How to tune the checkin
 
@@ -365,17 +383,6 @@ The fired-checkin news item carries:
 
 When a fire wakes you, follow the probe ladder in the next section before deciding to nudge, snooze, or close. Pinging the delegate via `/talk-to` is the LAST resort: it costs the delegate's tokens and blocks both sides while the delegate composes a status reply.
 
-### Picking the right interval
-
-The interval should be **slightly longer than the expected task duration**, not aggressively short. The first fire is meant to land *after* the work should plausibly be done, so its arrival is a real signal that something is off rather than routine noise.
-
-Rules of thumb:
-- Task you expect to take 5 min → set `checkin: "6m"` (or `7m`). First fire = "should be done by now, why isn't it?"
-- Task you expect to take 30 min → set `checkin: "35m"`, `checkin_iters: 3`. Each fire is a meaningful checkpoint, not a buzz.
-- Task with unknown duration (audit, exploration, research) → set the interval to your patience threshold, not your hope. If you'd want to know after 10 min, that's the interval.
-
-Aggressive intervals (every 90s on a 5-min task) generate noise the dispatcher learns to ignore. Conservative intervals (longer than expected) make every fire actionable.
-
 ### How to react to a fire — the probe ladder
 
 When a `checkin_due` lands in your inbox, walk this ladder from cheapest to most expensive. Stop at the first signal that tells you what's happening. Most fires resolve at step 1 or 2 — you rarely need to escalate to `/talk-to`.
@@ -456,4 +463,12 @@ A checkin in `closed` or `expired` state never fires again. Snoozing a closed/ex
 
 ### Why this exists
 
-Checkins solve the **claimed-and-idled** failure mode: a delegate accepts a task, then stops making progress for hours without saying so. Without supervision, the dispatcher only finds out when they happen to look. With auto-attach, the dispatcher gets pinged on a cadence, can decide whether to nudge / snooze / close, and pays nothing in the happy path because successful tasks auto-close their own checkin silently.
+Checkins solve the **claimed-and-idled** failure mode: a delegate accepts a task, then stops making progress for hours without saying so. Without supervision, the dispatcher only finds out when they happen to look — if ever. That work sits invisibly blocked, burning time and team velocity.
+
+With checkins and reasonable intervals:
+- The dispatcher gets pinged on a meaningful cadence (not noisy, not silent)
+- They can decide cheaply whether to nudge, snooze, or close (the probe ladder avoids wasting the delegate's tokens)
+- Successful tasks auto-close their own checkin silently in the happy path
+- Stalled work surfaces immediately instead of rotting
+
+Dispatchers who skip checkins, or use aggressive intervals and then ignore the pings, lose supervision entirely. That's why interval-tuning is as important as deciding to use a checkin at all.
