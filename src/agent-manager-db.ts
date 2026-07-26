@@ -6321,7 +6321,12 @@ export class AgentManagerDb {
         if (teamFlagIndex >= 0 && !overrideTeam) {
           return { ok: false, error: 'Usage: /import <file> [--team <name>]' };
         }
-        const importArgs = args.filter((a, i) => i !== teamFlagIndex && i !== teamFlagIndex + 1);
+        // With no --team, indexOf returns -1 and `i !== teamFlagIndex + 1`
+        // becomes `i !== 0`, silently dropping the FILENAME — so the no-flag
+        // form (§7's primary form) could never work. Only filter when present.
+        const importArgs = teamFlagIndex >= 0
+          ? args.filter((_a, i) => i !== teamFlagIndex && i !== teamFlagIndex + 1)
+          : args;
         const importFile = importArgs[0];
         if (!importFile) {
           return { ok: false, error: 'Usage: /import <file> [--team <name>]' };
@@ -6583,6 +6588,16 @@ export class AgentManagerDb {
               ...(agentConfig.catalog && { catalog: agentConfig.catalog }),
               // D10: an address identifier round-trips through metadata.
               ...(agentConfig.agent_account && { agent_account: agentConfig.agent_account }),
+              // DMZ posture. Same shape POST /agents/register stamps at
+              // manager-join — one format, not a second. `!== undefined` and
+              // not truthiness: `mesh_member: false` is the whole point, and a
+              // truthy check would drop exactly the value that matters.
+              ...(agentConfig.mesh_member !== undefined && { mesh_member: agentConfig.mesh_member }),
+              ...(agentConfig.mesh_reachable !== undefined && { mesh_reachable: agentConfig.mesh_reachable }),
+              ...(agentConfig.public_endpoint !== undefined && { public_endpoint: agentConfig.public_endpoint }),
+              ...(agentConfig.dmz !== undefined && { dmz: agentConfig.dmz }),
+              ...(agentConfig.allowed_inbound && { allowed_inbound: agentConfig.allowed_inbound }),
+              ...(agentConfig.allowed_outbound && { allowed_outbound: agentConfig.allowed_outbound }),
               // Profile floor from YAML (bio/handles) — same semantics as catalog.
               ...(agentConfig.bio && { bio: agentConfig.bio }),
               ...(agentConfig.handles && { handles: agentConfig.handles })

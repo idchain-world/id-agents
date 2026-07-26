@@ -101,6 +101,17 @@ export interface AgentSpec {
   // Identity fields (D9/D10). Export emits these; without them declared here
   // the parser drops them and an exported team cannot round-trip its ENS
   // handle or its agent_account — export would be write-only.
+  // DMZ posture (§3, classified `config`). Written by the public-agent-remote
+  // branch of POST /agents/register and exported; without them declared here
+  // the parser keeps them but the deploy create-path allow-list drops them, so
+  // an exported DMZ agent re-imports MESH-REACHABLE — the gate reads
+  // `mesh_member !== false`, and undefined is not false.
+  mesh_member?: boolean;
+  mesh_reachable?: boolean;
+  public_endpoint?: boolean;
+  dmz?: boolean;
+  allowed_inbound?: string[];
+  allowed_outbound?: string[];
   tokenId?: string;                   // ENS token id / label, agents.token_id
   domain?: string;                    // ENS domain, agents.domain
   agent_account?: string;             // Ethereum address identifier (D10)
