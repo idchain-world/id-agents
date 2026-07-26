@@ -1074,6 +1074,8 @@ export class AgentManagerDb {
         targetPath: autoExportPath(this.baseWorkDir, team.name),
         schedulesByAgent,
         org: teamOrg,
+        // #f37ad05d — lets the exporter tell a generated workdir from an authored one.
+        baseWorkDir: this.baseWorkDir,
       });
     });
   }
@@ -5496,6 +5498,8 @@ export class AgentManagerDb {
           org: teamOrg,
           profilesRoot,
           avatarsRoot,
+          // #f37ad05d — lets the exporter tell a generated workdir from an authored one.
+          baseWorkDir: this.baseWorkDir,
         });
         // A legacy team's org came from a file rather than the row — say so.
         if (orgWarning) result.warnings.push(orgWarning);

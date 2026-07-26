@@ -44,6 +44,7 @@ import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
 import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 import { classifyMetadataKey, listClassifiedMetadataKeys } from '../../src/lib/metadata-taxonomy.js';
+import { isGeneratedWorkdir } from '../../src/lib/export-team-config.js';
 
 async function createInMemoryDb() {
   const adapter = new SqliteAdapter(':memory:');
@@ -193,6 +194,39 @@ describe('every config-classified key survives export -> import', () => {
   it('every exception is a real config key — the list cannot drift', () => {
     const stale = Object.keys(EXCEPTIONS).filter((k) => !configKeys().includes(k));
     expect(stale).toEqual([]);
+  });
+
+  /**
+   * THE workingDirectory EXCEPTION (#f37ad05d), stated rather than assumed.
+   *
+   * Export now OMITS a `working_directory` the deployer generated
+   * (`<baseWorkDir>/agents/<id>`) and carries it out as a comment instead, so
+   * that a restored agent gets a fresh directory rather than a pointer into the
+   * original's live one. That is a deliberate non-round-tripping key.
+   *
+   * This guard is unaffected — but only because its fixture path is AUTHORED,
+   * which is an accident of how the fixture is built and would stop being true
+   * the moment someone dropped the `workingDirectory` line from it. Pinning it
+   * here means the guard KNOWS about the exception: if the fixture ever becomes
+   * a generated path, this fails loudly instead of the round-trip assertion
+   * quietly testing a weakened case.
+   */
+  it('the fixture path is AUTHORED, so the generated-workdir exception does not apply', () => {
+    const authored = path.join(configDir, 'rt-wd');
+    // Authored means: not the shape deploy synthesises for any id.
+    expect(isGeneratedWorkdir({ name: 'roundtrip', id: 'agent_any_id', working_directory: authored }, workDir))
+      .toBe(false);
+  });
+
+  it('an authored workingDirectory survives the round-trip unchanged', async () => {
+    expect((await run(`/deploy ${writeFixtureConfig()}`)).body.ok).toBe(true);
+    const exported = path.join(configDir, 'wd-exported.yaml');
+    expect((await run(`/export ${TEAM} ${exported}`)).body.ok).toBe(true);
+    expect((await run(`/import ${exported} --team ${NEW_TEAM}`)).body.ok).toBe(true);
+
+    const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
+    const row = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'roundtrip');
+    expect(row!.working_directory).toBe(path.join(configDir, 'rt-wd'));
   });
 
   it('round-trips every config-classified key through export -> import', async () => {
