@@ -133,7 +133,9 @@ const MIN_VISIBLE = 3;
 const SELF_AGENT = 'tui';
 const FLASH_MS = 1500;
 const TERMINAL_CONTENT_WIDTH = 76;
-const TEAM_MUTATING_COMMANDS: ReadonlySet<string> = new Set(['team', 'deploy', 'sync']);
+// 'sync' removed in commit 9 (D2) — it mutates nothing now, so it must not
+// trigger the team-mutation refresh path.
+const TEAM_MUTATING_COMMANDS: ReadonlySet<string> = new Set(['team', 'deploy']);
 // Commands whose first positional arg is an agent name. When the operator
 // is on the All view (selectedTeam === null), App.tsx tries to resolve
 // the agent across all teams to pick the right X-Id-Team header.

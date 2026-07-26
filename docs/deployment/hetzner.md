@@ -122,7 +122,7 @@ curl http://localhost:4100/health
 # Deploy first agent via CLI
 npm run id-agents
 # First time: /deploy local-agent test-agent
-# To update later: /sync <config>  (preserves sessions)
+# To change a live team later: /agents spawn|remove, /model  (/sync is REMOVED)
 ```
 
 ## Configuration
@@ -230,7 +230,7 @@ npm run id-agents
 
 # 3. Deploy agents via CLI (first time)
 /deploy local-agent my-agent
-# To update a running team later: /sync <config>
+# To change a running team later: /agents spawn|remove, /model  (/sync is REMOVED)
 ```
 
 ### Testing the Setup

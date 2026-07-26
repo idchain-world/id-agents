@@ -21,7 +21,7 @@ The destination is written to `<libraryRoot>/<your-team>.yaml`. Re-installing re
 
 ## After install
 
-Set both agents' `workingDirectory:` to your contracts checkout, then deploy with `/sync <your-team>`. `/sync` is additive and receipt-driven; the workspace receipt at `.id-agents/receipt.json` is the ownership ledger. `id-agents unsync <your-team>` reverses only the files the sync wrote.
+Set both agents' `workingDirectory:` to your contracts checkout, then deploy with `id-agents sync <config>` (the WORKSPACE CLI — not the removed `/sync` slash command). It is additive and receipt-driven; the workspace receipt at `.id-agents/receipt.json` is the ownership ledger. `id-agents unsync <config>` reverses only the files it wrote.
 
 ## TUI
 

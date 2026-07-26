@@ -24,6 +24,7 @@ import { AgentRestServer } from './agent-rest-server.js';
 import { defaultDeliverFn, redactSshTarget, type DeliverFn } from './lib/ssh-deliver.js';
 import { probeRemoteAgent, defaultHealthProbeFn, type HealthProbeFn } from './lib/remote-heartbeat.js';
 import { filterClaudeEnvVars } from './lib/env-hygiene.js';
+import { SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
 import { resolveWithinRoots, spawnWorkdirRoots } from './lib/path-policy.js';
 import { type Db } from './db/db-service.js';
 import type { AgentRow, ScheduleDefinitionRow, TaskRow } from './db/types.js';
@@ -7230,12 +7231,7 @@ export class AgentManagerDb {
         if (action === 'sync') {
           return {
             ok: false,
-            error:
-              '/sync has been removed. The database is the source of truth; config files are ' +
-              'import/export artifacts. Use /export <team> [path] to write a config from the database, ' +
-              '/import <file> [--team <name>] to create a new team from one, /diff <team> <config> to ' +
-              'inspect drift without changing anything, and /agents spawn or /agents remove to change ' +
-              'a live team.',
+            error: SYNC_REMOVED_MESSAGE,
           };
         }
         return { ok: false, error: `Unknown command: ${action}. Available: agents, status, schedule, delete, ask, hey, news, deploy, export, import, diff, agent, model, tasks, task, configs, teams, team, keys, meta, pay, heartbeat, heartbeats, cancel, clear, list, update` };

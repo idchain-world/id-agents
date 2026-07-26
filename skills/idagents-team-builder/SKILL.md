@@ -102,7 +102,7 @@ Available templates today (under `configs/agents/`): `security`, `solidity-secur
 
 The per-agent skill copy is **a full copy at deploy time**. Each agent owns its skills and can modify them independently. Edits do not affect other agents and do not get clobbered on `/agents rebuild` (rebuild restarts existing agents from DB; it does not re-overlay).
 
-`/sync <team>` and `/deploy <team>` DO re-overlay skills. Per-agent skill edits made after deploy survive a `/agents rebuild` but get clobbered by a `/sync` or `/deploy`. If an agent has customizations worth keeping, either fold them back into a library template or skip `/sync` and use targeted edits.
+`/deploy <team>` re-overlays skills, but it is CREATE-ONLY — it refuses an existing team, so it can no longer clobber a live one. `/sync` is REMOVED. Per-agent skill edits survive `/agents rebuild`. If an agent has customizations worth keeping, fold them back into a library template.
 
 ### 7. Structure: defaults + org + agents.
 
@@ -307,7 +307,9 @@ Brief paragraph: what this agent owns, who it reports to, who reports to it.
 | Command | Effect | When to use |
 |---------|--------|-------------|
 | `/deploy <team>` | Nuke and recreate from YAML | First time, or after major restructuring |
-| `/sync <team>` | Reconcile YAML against running team. Adds new, removes deleted, re-overlays skills | After editing the YAML |
+| `/diff <team> <config>` | Report drift between the database and a config. READ-ONLY — changes nothing | Any time you want to see divergence |
+| `/agents spawn`, `/agents remove`, `/model` | Change a live team | The database is the source of truth |
+| `/export <team> [path]` / `/import <file> [--team <name>]` | Write a config from the database / create a NEW team from one | Backup, clone, migrate |
 | `/agents <team> rebuild` | Restart existing agents from DB. Does NOT re-overlay | Cycling agents without losing their per-agent skill customizations |
 | `/agents <team> stop` | Stop agents (keep DB rows) | Pausing work |
 | `/agents <team> start` | Start stopped agents | Resuming |
@@ -324,6 +326,6 @@ Brief paragraph: what this agent owns, who it reports to, who reports to it.
 
 ## See also
 
-- `idagents-admin-control` — programmatic team management (sync, rebuild, dispatch, restart).
+- `idagents-admin-control` — programmatic team management (export/import, rebuild, dispatch, restart).
 - `id-agents/configs/agents/` — library agent templates and their bundled skills.
 - `id-agents/src/config-parser.ts` — source of truth for what the parser actually does (`mergeDefaults`, `loadSubAgentTemplate`, `copyLibraryAgentOverlay`).

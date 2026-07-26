@@ -14,11 +14,11 @@ The central process running on port 4100 (configurable via `--port` or `MANAGER_
 
 **Responsibilities:**
 - Stores agent state in the database (SQLite or PostgreSQL)
-- Handles the `/remote` API for programmatic access — no auth required (supports `/deploy`, `/sync`, `/agents`, `/ask`, etc.)
+- Handles the `/remote` API for programmatic access — no auth required (supports `/deploy`, `/export`, `/import`, `/diff`, `/agents`, `/ask`, etc.)
 - Serves read-only library inventory via `/library/agents` and `/library/skills`
 - Routes fire-and-forget messages between agents via `/message`
 - Spawns and stops agent processes
-- Provisions opt-in OWS wallets for agents (deploy/sync, manager-join, or on demand)
+- Provisions opt-in OWS wallets for agents (deploy/spawn, manager-join, or on demand)
 - Runs health checks every 30 seconds (marks agents online/offline)
 - Serves the `/agents` list with health status
 - Owns the scheduling system (heartbeat + calendar)
@@ -57,11 +57,11 @@ The user-facing terminal interface.
 
 **Responsibilities:**
 - Connects to the manager on startup (auto-starts it if not running)
-- Provides commands: `/ask`, `/deploy`, `/sync`, `/agents`, `/status`, etc.
+- Provides commands: `/ask`, `/deploy`, `/export`, `/import`, `/diff`, `/agents`, `/status`, etc.
 - Polls agent news feeds for replies
 - Manages agent lifecycle (deploy, sync, rebuild, delete)
 - `/deploy` for clean/first-time deploys; [`/sync`](../guides/sync-command.md) for updating running teams (preserves sessions)
-- Supports `--dry-run` on both `/deploy` and `/sync` for preflight without creating agents
+- Supports `--dry-run` on `/deploy` for preflight without creating agents; `/diff <team> <config>` reports drift against a live team and is always read-only
 
 ## Message Flow
 
@@ -144,7 +144,7 @@ This ensures agent-specific files overlay team skills, and the personality file 
 
 Agents can opt in to a multi-chain OWS wallet:
 
-1. `wallet: true` in the YAML config (per agent or under `defaults`) provisions a wallet at deploy/sync; for remote public agents the same flag on manager-join provisions on the manager host
+1. `wallet: true` in the YAML config (per agent or under `defaults`) provisions a wallet at deploy/spawn; for remote public agents the same flag on manager-join provisions on the manager host
 2. `/agent <name> wallet provision` provisions on demand for a running agent
 3. Wallet identifiers land in the agent's metadata (`ows_wallet`, `ows_address`); remote public agents additionally get a wallet identity file delivered over SSH
 

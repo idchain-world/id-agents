@@ -71,7 +71,7 @@ With the legacy format, the scheduler sends the configured `message` directly in
 
 ## How It Works
 
-1. At deploy/sync time, `HEARTBEAT.md` is copied from the agent template directory to the working directory root
+1. At deploy/spawn time, `HEARTBEAT.md` is copied from the agent template directory to the working directory root
 2. The `heartbeat` value compiles into an internal `interval` schedule targeting the agent
 3. When the schedule fires, the manager sends a generic message: "Read your HEARTBEAT.md checklist..."
 4. The agent reads `HEARTBEAT.md`, performs any needed checks, and responds

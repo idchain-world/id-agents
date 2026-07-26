@@ -190,7 +190,7 @@ Each agent can have the following fields:
 | `plugins` | No | From defaults | Optional plugins for runtimes that support them |
 | `allowedTools` | No | From defaults | Restrict agent to specific tools |
 | `env` | No | `{}` | Environment variables for the agent process |
-| `wallet` | No | From defaults | Opt in to OWS wallet provisioning at deploy/sync |
+| `wallet` | No | From defaults | Opt in to OWS wallet provisioning at deploy/spawn |
 | `workingDirectory` | No | - | Working directory for the agent process |
 | `agent` | No | - | Library agent entry name. Resolves to `configs/agents/<name>/` (Claude-native) or the `configs/agents/<name>.md` + `configs/agents/<name>/` sibling pair (AGENTS.md-native), and deploys to the runtime-aware overlay target before `skills` are applied |
 | `heartbeat` | No | - | Heartbeat interval in seconds, or legacy `{interval, message}` object |
@@ -565,7 +565,7 @@ Environment variables take precedence over config file values for most settings.
 
 ID Agents looks for configuration files in:
 
-1. Path specified via CLI: `/deploy path/to/config.yaml` or `/sync path/to/config.yaml`
+1. Path specified via CLI: `/deploy path/to/config.yaml`, `/import path/to/config.yaml`, or `/diff <team> path/to/config.yaml`
 2. Team config: `configs/<team-name>.yaml`
 3. Default config: `configs/default.yaml`
 

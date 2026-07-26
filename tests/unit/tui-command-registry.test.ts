@@ -44,7 +44,9 @@ describe('TUI command registry tiers', () => {
     expect(confirmationLevel(command('agent'), ['worker', 'probe'])).toBe('none');
 
     expect(confirmationLevel(command('deploy'), ['idchain'])).toBe('yn');
-    expect(confirmationLevel(command('sync'), ['idchain'])).toBe('yn');
+    // /sync is REMOVED (commit 9, D2): still registered so it tab-completes
+    // and explains itself, but it mutates nothing so it is no longer gated.
+    expect(confirmationLevel(command('sync'), ['idchain'])).toBe('none');
     expect(confirmationLevel(command('heartbeat'), ['enable', 'worker'])).toBe('yn');
     expect(confirmationLevel(command('heartbeat'), ['worker'])).toBe('none');
   });

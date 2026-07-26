@@ -260,7 +260,7 @@ agents:
 **Dry run before deploy:**
 ```bash
 /deploy default --dry-run
-/sync default --dry-run    # same validation, for updating running teams
+/diff <team> default       # report drift against a running team (read-only)
 ```
 
 **Via Remote API:**

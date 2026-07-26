@@ -6,6 +6,7 @@
  * surface attaches its own runner (see `src/tui/commands/registry.ts`).
  */
 
+import { SYNC_REMOVED_DESCRIPTION } from '../../lib/sync-removed.js';
 import type {
   ArgCompleterContext,
   CommandPolicy,
@@ -207,16 +208,16 @@ const deployPolicy = remotePolicy('deploy', 'Deploy a team config: `/deploy <con
     args.length > 0 ? `deploy config: ${args.join(' ')}` : 'deploy (no args — will error)',
 });
 
+// §9 (D2): /sync is removed but stays REGISTERED, so it still tab-completes
+// and the person who types it gets told what replaced it. Deleting the entry
+// would make it silently unknown, which is the outcome that sends people
+// hunting for a bug. Tier drops to 'safe' and confirmation is off: there is
+// nothing to confirm about a command that only prints guidance.
 const syncPolicy: CommandPolicy = {
   name: 'sync',
-  description: 'Sync team against YAML: `/sync <team>`',
-  tier: 'powerful',
-  shouldConfirm: () => true,
-  confirmPreview: (args) => {
-    if (args.length === 0) return 'sync (no args — will error)';
-    const team = args[0]!.toLowerCase();
-    return args.length === 1 ? `sync team: ${team}` : `sync team: ${team} ${args.slice(1).join(' ')}`;
-  },
+  description: SYNC_REMOVED_DESCRIPTION,
+  tier: 'safe',
+  shouldConfirm: () => false,
 };
 
 const heartbeatPolicy: CommandPolicy = {

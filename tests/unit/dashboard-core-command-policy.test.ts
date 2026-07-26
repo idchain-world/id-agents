@@ -91,14 +91,18 @@ describe('confirmation gating', () => {
     expect(confirmationLevel(task, ['delete', 'abc'])).toBe('yn');
     expect(confirmationLevel(task, ['delete', '*'])).toBe('retype');
     expect(confirmationLevel(task, ['list'])).toBe('none');
-    expect(confirmationLevel(sync, ['idchain'])).toBe('yn');
+    // /sync is REMOVED (commit 9, D2). It stays REGISTERED so it still
+    // tab-completes and can explain itself, but it mutates nothing, so it is
+    // 'safe' with no confirmation and no preview. Was 'yn' / 'sync team: idchain'.
+    expect(confirmationLevel(sync, ['idchain'])).toBe('none');
     expect(confirmationLevel(help, [])).toBe('none');
   });
 
   it('renders the frozen preview strings', () => {
     expect(commandConfirmPreview(task, ['delete', '*'])).toBe('DELETE ALL tasks in the active team');
     expect(commandConfirmPreview(task, ['status', 't1', 'done'])).toBe('set task t1 to done');
-    expect(commandConfirmPreview(sync, ['idchain'])).toBe('sync team: idchain');
+    // No preview: a command that only prints guidance has nothing to preview.
+    expect(commandConfirmPreview(sync, ['idchain'])).toBeNull();
     expect(commandConfirmPreview(help, [])).toBeNull();
   });
 });

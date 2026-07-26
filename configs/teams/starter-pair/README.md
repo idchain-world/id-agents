@@ -21,4 +21,4 @@ The destination is written to `<libraryRoot>/<your-team>.yaml`. Re-installing re
 
 ## After install
 
-Deploy with `/sync <your-team>` from the TUI. `/sync` is additive and receipt-driven — files the user owns or has edited are left untouched. `id-agents unsync <your-team>` reverses only the files the sync wrote, using the workspace receipt at `.id-agents/receipt.json`.
+Deploy with `id-agents sync <config>` (the WORKSPACE CLI — not the removed `/sync` slash command). It is additive and receipt-driven — files the user owns or has edited are left untouched. `id-agents unsync <config>` reverses only the files it wrote, using the workspace receipt at `.id-agents/receipt.json`.

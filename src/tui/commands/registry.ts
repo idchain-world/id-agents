@@ -8,6 +8,7 @@
 // bulk lifecycle, and TUI navigation actions — and re-exports the policy
 // surface so App.tsx and existing tests keep their stable imports.
 
+import { SYNC_REMOVED_MESSAGE } from '../../lib/sync-removed.js';
 import { fetchAgentsAllTeams, fetchAgentsByTeam, fetchTeams, runRemoteCommand } from '../api/manager.js';
 import {
   AGENTS_BULK_ACTIONS,
@@ -174,10 +175,10 @@ const taskRunner: Runner = async ({ manager, executor, signal, args, teamName })
   return runRemoteCommand(manager, executor, ['/task', ...args].join(' '), signal, teamName);
 };
 
-const syncRunner: Runner = async ({ manager, executor, signal, args, teamName }) => {
-  const normalized = args.map((a, i) => (i === 0 ? a.toLowerCase() : a));
-  return runRemoteCommand(manager, executor, ['/sync', ...normalized].join(' '), signal, teamName);
-};
+// §9 (D2): answered locally rather than forwarded. The manager also refuses
+// /sync, but a local answer means the guidance is identical and instant even
+// against a manager that has not been restarted since the removal.
+const syncRunner: Runner = async () => ({ ok: false, error: SYNC_REMOVED_MESSAGE });
 
 const heartbeatRunner: Runner = async ({ manager, executor, signal, args, teamName }) => {
   const sub = args[0]?.toLowerCase() ?? '';
