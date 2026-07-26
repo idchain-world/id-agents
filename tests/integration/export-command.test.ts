@@ -165,6 +165,19 @@ describe('/export command wiring', () => {
     expect(fs.existsSync(recorded)).toBe(true);
   });
 
+  // The two tests around this one each set only ONE path source, so either
+  // precedence ordering passes both. This is the only test where both sources
+  // are set, so it is the only one that pins §5.1's ordering.
+  it('prefers an explicit path over a recorded last_config_path', async () => {
+    const recorded = path.join(outDir, 'recorded.yaml');
+    const explicit = path.join(outDir, 'explicit.yaml');
+    await db.teams.updateConfig(teamId, { last_config_path: recorded });
+    const body = await runCommand(`/export ${TEAM} ${explicit}`);
+    expect(body.result.path).toBe(explicit);
+    expect(fs.existsSync(explicit)).toBe(true);
+    expect(fs.existsSync(recorded)).toBe(false);
+  });
+
   it('falls back to <baseWorkDir>/teams/<team>/<team>.yaml when nothing is recorded', async () => {
     const body = await runCommand(`/export ${TEAM}`);
     expect(body.result.path).toBe(path.join(workDir, 'teams', TEAM, `${TEAM}.yaml`));
