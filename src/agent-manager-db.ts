@@ -24,6 +24,7 @@ import { AgentRestServer } from './agent-rest-server.js';
 import { defaultDeliverFn, redactSshTarget, type DeliverFn } from './lib/ssh-deliver.js';
 import { probeRemoteAgent, defaultHealthProbeFn, type HealthProbeFn } from './lib/remote-heartbeat.js';
 import { filterClaudeEnvVars } from './lib/env-hygiene.js';
+import { resolveWithinRoots, spawnWorkdirRoots } from './lib/path-policy.js';
 import { type Db } from './db/db-service.js';
 import type { AgentRow, ScheduleDefinitionRow, TaskRow } from './db/types.js';
 import fetch from 'node-fetch';
@@ -2973,8 +2974,26 @@ export class AgentManagerDb {
         }
 
         id = `agent_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        // Use config-specified working directory if provided, otherwise use workspace
-        const workingDirectory = configWorkDir || `${this.baseWorkDir}/agents/${id}`;
+
+        // §6.1: `workingDirectory` comes straight from the request body and
+        // validateName covers only the NAME, so an unguarded value put the
+        // agent's workspace anywhere on the host. Resolve it against the
+        // permitted roots BEFORE it is used to derive any path or touch disk.
+        // An omitted value keeps the existing default and is not validated,
+        // because we built it ourselves.
+        let requestedWorkDir: string | undefined;
+        if (configWorkDir !== undefined && configWorkDir !== null && configWorkDir !== '') {
+          const verdict = resolveWithinRoots(configWorkDir, spawnWorkdirRoots(this.baseWorkDir));
+          if (!verdict.ok) {
+            console.warn(`[Spawn] rejected workingDirectory: ${verdict.reason}`);
+            return res.status(400).json({ error: 'invalid_working_directory' });
+          }
+          // Store the RESOLVED path: keeping the raw one would let a symlink be
+          // re-followed somewhere else after the check.
+          requestedWorkDir = verdict.path;
+        }
+
+        const workingDirectory = requestedWorkDir || `${this.baseWorkDir}/agents/${id}`;
 
         // Get default plugins from config
         const defaultPlugins = this.getDefaultPlugins();
@@ -3101,7 +3120,8 @@ export class AgentManagerDb {
         // Use host paths for local agents
         // If configWorkDir is an absolute path, use it directly (project repo)
         const hostWorkspaceDir = process.env.ID_WORKSPACE_DIR || this.baseWorkDir;
-        const hostWorkingDirectory = configWorkDir && path.isAbsolute(configWorkDir) ? configWorkDir : `${hostWorkspaceDir}/agents/${id}`;
+        // Derives from the VALIDATED value, never the raw body field.
+        const hostWorkingDirectory = requestedWorkDir && path.isAbsolute(requestedWorkDir) ? requestedWorkDir : `${hostWorkspaceDir}/agents/${id}`;
         const hostSharedDirectory = `${hostWorkspaceDir}/teams/${teamName}`;
 
         // Seed heartbeat schedule if enabled
