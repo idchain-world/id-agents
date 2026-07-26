@@ -6309,6 +6309,12 @@ export class AgentManagerDb {
               // restore.
               token_id: agentConfig.tokenId ?? null,
               domain: agentConfig.domain ?? null,
+              // #42a80a4c: same reason as D9 above, for the remote-endpoint
+              // identity. Export emitted customer_domain/public_endpoint_url
+              // that nothing could restore, so an imported public-agent-remote
+              // agent came back unreachable.
+              customer_domain: agentConfig.customer_domain ?? null,
+              public_endpoint_url: agentConfig.public_endpoint_url ?? null,
             });
 
             // All agents run locally - set up database and let CLI spawn the process

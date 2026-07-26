@@ -146,8 +146,12 @@ const COLUMN_FIXTURE_VALUES: Record<string, unknown> = {
   working_directory: undefined,   // set per-run: the temp dir; see the exception
   token_id: '4242',               // D9
   domain: 'roundtrip.eth',        // D9
-  customer_domain: undefined,     // see COLUMN_EXCEPTIONS
-  public_endpoint_url: undefined, // see COLUMN_EXCEPTIONS
+  // #42a80a4c: NO LONGER EXCEPTIONS. Declared in AgentSpec and set by the
+  // deploy create-path, so they round-trip like any other column. The dedicated
+  // public-agent-remote test below covers the shape that actually carries them
+  // in production; these values prove the general path.
+  customer_domain: 'customer.example.com',
+  public_endpoint_url: 'https://agent.example.com',
 };
 
 /**
@@ -160,13 +164,6 @@ const COLUMN_EXCEPTIONS: Record<string, string> = {
     + 'the key, so a restored agent gets a fresh directory instead of a pointer into the original\'s '
     + 'live one. An AUTHORED path is NOT excepted and must round-trip untouched — that is the '
     + 'load-bearing assertion below, protecting the 42 authored paths on the live fleet.',
-  customer_domain:
-    'KNOWN DEFECT, not a legitimate non-round-trip: classified `config` and exported, but absent from '
-    + 'AgentSpec, so the parser drops it and the deploy create-path never sets it. Write-only export — '
-    + 'the same class as org, D9, D10 and the DMZ keys. Proven by the dedicated test below.',
-  public_endpoint_url:
-    'KNOWN DEFECT, as customer_domain: exported, undeclared in AgentSpec, dropped on import. A restored '
-    + 'public-agent-remote agent loses the endpoint that makes it reachable.',
 };
 
 const TEAM = 'rt-src';
@@ -430,24 +427,23 @@ describe('every config-classified key survives export -> import', () => {
   });
 
   /**
-   * INSTANCE #5 OF THE CLASS, found by extending the guard to columns and
-   * PROVEN here rather than asserted in a comment.
+   * INSTANCE #5 OF THE CLASS, now FIXED (#42a80a4c).
    *
-   * `customer_domain` and `public_endpoint_url` are classified `config` and are
-   * written into the exported file, but neither is declared in `AgentSpec`, so
-   * `parseTeamConfig` drops them and the deploy create-path never sets them.
-   * Export is write-only for both: a public-agent-remote agent restored from a
-   * config comes back with no endpoint and no customer domain — unreachable.
+   * `customer_domain` and `public_endpoint_url` are classified `config` and
+   * written into the exported file. Until this fix neither was declared in
+   * `AgentSpec` and neither was set by the deploy create-path, so export was
+   * write-only for both and a restored public-agent-remote agent came back with
+   * no endpoint and no customer domain — unreachable. Exactly the shape of org,
+   * D9, D10 and the DMZ posture keys.
    *
-   * Exactly the shape of org, D9, D10 and the DMZ posture keys. The fix belongs
-   * in AgentSpec and the deploy create-path, which is code, not this test-only
-   * gate — filed rather than smuggled in here.
+   * This test was written to PIN THE BUG and asserted the loss. It now asserts
+   * the fix, on the row shape that actually carries these fields in production:
+   * only `POST /agents/register` creates one, so it is seeded directly.
    *
-   * WHEN THIS TEST FAILS, THE DEFECT HAS BEEN FIXED: delete it and remove both
-   * entries from COLUMN_EXCEPTIONS. It pins a bug on purpose, so it must not be
-   * allowed to keep passing quietly once the bug is gone.
+   * THIS IS THE LOAD-BEARING TEST for the fix — removing either field from
+   * AgentSpec, or from the deploy create-path, must fail it.
    */
-  it('PINS A DEFECT: customer_domain and public_endpoint_url are write-only exports', async () => {
+  it('a public-agent-remote agent round-trips REACHABLE — endpoint and domain intact', async () => {
     // Seed a register-shaped row directly: no config file can produce one.
     const teamId = await db.teams.getOrCreateTeamId(TEAM);
     await db.agents.create({
@@ -476,9 +472,9 @@ describe('every config-classified key survives export -> import', () => {
     const restored = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'remote-one');
     expect(restored).toBeTruthy();
 
-    // ...and the import side loses both. This is the defect, not the contract.
-    expect(restored!.customer_domain ?? null).toBeNull();
-    expect(restored!.public_endpoint_url ?? null).toBeNull();
+    // ...and the import side now keeps both, so the restored agent is reachable.
+    expect(restored!.customer_domain).toBe('customer.example.com');
+    expect(restored!.public_endpoint_url).toBe('https://agent.example.com');
   });
 
   it('mesh_member: false survives — a DMZ agent does not re-import mesh-reachable', async () => {

@@ -115,6 +115,13 @@ export interface AgentSpec {
   tokenId?: string;                   // ENS token id / label, agents.token_id
   domain?: string;                    // ENS domain, agents.domain
   agent_account?: string;             // Ethereum address identifier (D10)
+  // Remote-endpoint identity (#42a80a4c). Classified `config` and exported, so
+  // without them declared here and set in the deploy create-path the export was
+  // WRITE-ONLY: a public-agent-remote agent restored from a config came back
+  // with no endpoint and no customer domain — unreachable. Snake_case matches
+  // the exporter's COLUMN_CONFIG_KEY, which maps both columns to themselves.
+  customer_domain?: string;           // agents.customer_domain
+  public_endpoint_url?: string;       // agents.public_endpoint_url
   wallet?: boolean;                   // Opt-in to OWS wallet provisioning at deploy/sync.
                                       // Default: false. When true the deploy/sync path
                                       // calls `ows wallet create` and writes
