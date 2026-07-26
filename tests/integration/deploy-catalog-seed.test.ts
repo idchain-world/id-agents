@@ -314,15 +314,17 @@ agents:
     expect(apiCat?.costTier).toBe('low');
   });
 
-  it('redeploy re-applies the YAML floor over a runtime PATCH', async () => {
-    // First deploy seeds the original catalog.
+  // SUPERSEDED BY D1 (commit 4). This used to assert that a redeploy re-applied
+  // the YAML floor over a runtime PATCH. /deploy is now create-only, so there is
+  // no redeploy to re-apply anything — the drift simply survives, because
+  // nothing is allowed to overwrite it. The coverage is kept rather than
+  // deleted, inverted to the new contract: the second deploy is REFUSED and the
+  // runtime state is left exactly as the agent wrote it.
+  it('refuses a redeploy and leaves runtime catalog drift untouched (D1)', async () => {
     await deploy(firstYamlPath);
     const beforeRow = await readAgentRowByName(AGENT_JR);
     expect((beforeRow.metadata as any).catalog.description).toBe('Junior dev for low-stakes work.');
 
-    // Simulate a runtime PATCH /catalog drift — the agent server writes back
-    // the merged metadata with a different description and an extra runtime
-    // field that's NOT in the YAML.
     const teamId = await db.teams.getOrCreateTeamId(TEST_TEAM);
     const driftedMeta = {
       ...(beforeRow.metadata as any),
@@ -336,25 +338,22 @@ agents:
       },
     };
     await db.agents.updateMetadata(beforeRow.id, driftedMeta);
-    const drifted = await db.agents.getByName(teamId, AGENT_JR);
-    expect((drifted!.metadata as any).catalog.role).toBe('rogue-role');
+    expect(((await db.agents.getByName(teamId, AGENT_JR))!.metadata as any).catalog.role).toBe('rogue-role');
 
-    // Redeploy with the updated YAML — should overwrite back to the YAML floor.
-    await deploy(redeployYamlPath);
+    // The redeploy is refused: the team already holds agents.
+    const resp = await fetch(`${baseUrl}/remote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Id-Team': TEST_TEAM, 'X-Id-Admin': '1' },
+      body: JSON.stringify({ command: `/deploy ${redeployYamlPath}` }),
+    });
+    expect(resp.status).toBe(409);
+    expect((await resp.json() as any).error).toBe('team_exists');
 
-    const after = await readAgentRowByName(AGENT_JR);
-    const afterCat = (after.metadata as any).catalog;
-    // YAML floor wins: role is back, description is the redeploy YAML's,
-    // expertise reflects the new YAML list (not the runtime drift).
-    expect(afterCat.role).toBe('junior-developer');
-    expect(afterCat.description).toBe('Updated junior dev blurb.');
-    expect(afterCat.expertise).toEqual(['typescript', 'simple-refactors', 'doc-edits']);
-    expect(afterCat.notSuitableFor).toEqual(['security-key-handling', 'multi-file-schema-migrations']);
-    // Runtime-only `currentTask` from the drift is gone — the YAML block is
-    // a full replacement at the catalog object level on redeploy.
-    expect(afterCat.currentTask).toBeUndefined();
-    // status comes from the YAML.
-    expect(afterCat.status).toBe('available');
+    // Runtime drift is intact — no YAML floor was re-applied over it.
+    const afterCat = ((await readAgentRowByName(AGENT_JR)).metadata as any).catalog;
+    expect(afterCat.role).toBe('rogue-role');
+    expect(afterCat.description).toBe('agent rewrote me at runtime');
+    expect(afterCat.currentTask).toBe('doing my own thing');
   });
 
   it('spawn env handoff carries the catalog seed as base64-encoded ID_AGENT_CATALOG', async () => {

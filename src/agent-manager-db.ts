@@ -3648,6 +3648,13 @@ export class AgentManagerDb {
 
       try {
         const result = await this.executeRemoteCommand(command.trim(), teamId, teamName, typeof from === 'string' ? from : undefined);
+        // A command may ask for a specific HTTP status via `httpStatus`. The
+        // field is deliberately NOT the older `status` some helpers already
+        // return: honouring that one here would silently change the response
+        // code of pre-existing paths, which is outside this change.
+        if (typeof result.httpStatus === 'number') {
+          return res.status(result.httpStatus).json({ error: result.error, message: result.message });
+        }
         res.json(result);
       } catch (error: any) {
         res.status(500).json({ error: error.message || 'Command execution failed' });
@@ -4783,7 +4790,7 @@ export class AgentManagerDb {
     teamId: string,
     teamName: string,
     callerFrom?: string,
-  ): Promise<{ ok: boolean; result?: any; error?: string }> {
+  ): Promise<{ ok: boolean; result?: any; error?: string; httpStatus?: number; message?: string }> {
     // Remove leading slash if present
     const cmd = command.startsWith('/') ? command.slice(1) : command;
     const parts = tokenizeCommand(cmd);
@@ -6196,6 +6203,32 @@ export class AgentManagerDb {
 
         const { agents, calendar, errors, teamName: configTeam, org } = processConfig(absolutePath, this.baseWorkDir, deployArgs);
 
+        // §4 REFUSAL CONTRACT (D1). /deploy creates teams; it never writes into
+        // an existing one. This runs BEFORE the getOrCreateTeamId / mkdirSync
+        // below and before any agent work, so a refusal mutates nothing.
+        //
+        // The check is "does this team already hold agents", not "does a team
+        // row exist". getTeam() on the way in calls getOrCreateTeamId, so a row
+        // for the request's team ALWAYS exists by the time deploy runs —
+        // refusing on row-existence alone would reject every deploy, including
+        // brand-new teams. An empty auto-created row is not a live team; a team
+        // with agents in it is exactly what D1 protects.
+        const targetTeamName = configTeam || teamName;
+        const existingTeam = await this.db.teams.getTeamByName(targetTeamName);
+        if (existingTeam) {
+          // listAll, not list(): a team holding only a register-created virtual
+          // agent is still live, and list() would not see it.
+          const occupants = await this.db.agents.listAll(existingTeam.id);
+          if (occupants.length > 0) {
+            return {
+              ok: false,
+              httpStatus: 409,
+              error: 'team_exists',
+              message: `Team "${targetTeamName}" already exists. /deploy only creates new teams. To change a live team use /agents spawn, /agents remove, or /model. To inspect drift, /diff <team> <config>.`,
+            };
+          }
+        }
+
         // If config specifies a team, use that instead of the request's team
         let effectiveTeamId = teamId;
         let effectiveTeamName = teamName;
@@ -6382,16 +6415,10 @@ export class AgentManagerDb {
               appendLibraryPersonaToAgentsMd(workingDirectory, agentConfig.agent, effectiveRuntime);
             }
 
-            // Remove any existing agent with this name to avoid duplicates on redeploy
-            const existing = await this.db.agents.getByName(effectiveTeamId, agentConfig.name);
-            if (existing) {
-              // Kill the old process before deleting the DB row to prevent orphans
-              if (existing.port) {
-                await this.killAgentProcess(existing.port);
-                await new Promise(r => setTimeout(r, 500));
-              }
-              await this.db.agents.deleteAgent(existing.id);
-            }
+            // §4.1: the recreate block that used to kill and delete an
+            // existing same-named agent is GONE. Under D1 deploy only ever
+            // targets an empty team, so it was unreachable — and it was the
+            // only path in deploy that could destroy a row it did not create.
 
             // Insert into database
             console.log(`[Deploy] Storing agent: name=${agentConfig.name}, type=${agentType}, configType=${agentConfig.type}`);

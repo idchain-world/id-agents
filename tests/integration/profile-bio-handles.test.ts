@@ -195,8 +195,19 @@ describe('agent profile bio/handles integration', () => {
     expect(yamlText).toContain('Edited via the dashboard.');
     expect(yamlText).toContain('edited-gh');
     expect(yamlText).toContain('# keep-me: comment preservation sentinel');
-    // …and a redeploy of the same file keeps the edited profile (YAML floor).
-    await deploy();
+    // …and under D1 (commit 4) a second deploy of the same file is REFUSED,
+    // so the edit survives because nothing is permitted to overwrite it. This
+    // assertion used to prove the YAML floor re-applied cleanly; create-only
+    // deploy removes the floor entirely, so the coverage is inverted rather
+    // than dropped.
+    const redeploy = await fetch(`${baseUrl}/remote`, {
+      method: 'POST',
+      headers: adminHeaders(TEST_TEAM),
+      body: JSON.stringify({ command: `/deploy ${yamlPath}` }),
+    });
+    expect(redeploy.status).toBe(409);
+    expect((await redeploy.json() as any).error).toBe('team_exists');
+
     const meta2 = (await readAgentRow()).metadata as Record<string, unknown>;
     expect(meta2.bio).toBe('Edited via the dashboard.');
     expect(meta2.handles).toEqual({ x: '@edited', github: 'edited-gh' });
