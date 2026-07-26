@@ -138,4 +138,4 @@ echo "$TASKS" | jq -r \
 
 - [Agent Outputs](./agent-outputs.md) — standardized output directory for artifacts
 - [News Feed](./news-feed.md) — message channel for fire-and-forget notifications
-- [Sync Command](./sync-command.md) — reconcile running teams with config
+- [Sync Command](./sync-command.md) — `/sync` is REMOVED; what replaced it

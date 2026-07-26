@@ -41,7 +41,7 @@ Response:
 | `/agents rebuild` | Rebuild all agents |
 | `/status` | Show team health |
 | `/deploy <config>` | Deploy agents from YAML config (clean/first-time) |
-| `/sync <config>` | [Reconcile running team with config](./sync-command.md) (preserves sessions) |
+| `/diff <team> <config>` | Report drift, read-only. `/sync` is [REMOVED](./sync-command.md) |
 | `/deploy local-agent <name>` | Deploy a single local agent |
 | `/delete <name>` | Delete agent |
 | `/ask <agent> <msg>` | Send message to agent (continues session) |

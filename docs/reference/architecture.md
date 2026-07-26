@@ -60,7 +60,7 @@ The user-facing terminal interface.
 - Provides commands: `/ask`, `/deploy`, `/export`, `/import`, `/diff`, `/agents`, `/status`, etc.
 - Polls agent news feeds for replies
 - Manages agent lifecycle (deploy, sync, rebuild, delete)
-- `/deploy` for clean/first-time deploys; [`/sync`](../guides/sync-command.md) for updating running teams (preserves sessions)
+- `/deploy` for NEW teams only (create-only, refuses an existing team); `/agents spawn|remove` and `/model` to change a running team; [`/sync` is REMOVED](../guides/sync-command.md)
 - Supports `--dry-run` on `/deploy` for preflight without creating agents; `/diff <team> <config>` reports drift against a live team and is always read-only
 
 ## Message Flow

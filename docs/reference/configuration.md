@@ -304,10 +304,10 @@ Standalone skills are always `configs/skills/<name>/SKILL.md`.
 
 At sync time, deploy is two-stage and **additive-only**:
 
-1. **Step A** — copy the agent library entry into the workspace, mapping each source file through the runtime translation table (see [/sync guide](../guides/sync-command.md))
+1. **Step A** — copy the agent library entry into the workspace, mapping each source file through the runtime translation table (see the [workspace sync CLI](../guides/sync-command.md#not-removed-id-agents-sync-the-workspace-cli))
 2. **Step B** — overlay each `skills:` entry on top, with last-writer-wins for same-named skills also bundled by the agent
 
-A receipt at `<workspace>/.id-agents/receipt.json` tracks ownership per managed file. **No file the user owns is ever modified or deleted** — files whose on-disk SHA does not match the receipt are skipped with a warning. See the [/sync guide](../guides/sync-command.md) for the full 4-case ownership rule, per-runtime mapping, memory-file fallback, and `unsync` undeploy behavior.
+A receipt at `<workspace>/.id-agents/receipt.json` tracks ownership per managed file. **No file the user owns is ever modified or deleted** — files whose on-disk SHA does not match the receipt are skipped with a warning. That receipt model belongs to the `id-agents sync` WORKSPACE CLI, which is not removed — see [the note on it](../guides/sync-command.md#not-removed-id-agents-sync-the-workspace-cli).
 
 ## Skills Configuration
 
@@ -408,7 +408,7 @@ agents:
     model: composer-2
 ```
 
-Use `/deploy <config> --dry-run` or `/sync <config> --dry-run` to validate runtime/model/auth compatibility before any agents are created. To update a running team without losing sessions, use [`/sync`](../guides/sync-command.md) instead of `/deploy`.
+Use `/deploy <config> --dry-run` to validate runtime/model/auth compatibility before any agents are created. `/deploy` is create-only, so to change a RUNNING team use `/agents spawn`, `/agents remove` and `/model`; `/diff <team> <config>` reports drift without changing anything.
 
 ---
 

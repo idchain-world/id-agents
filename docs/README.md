@@ -13,7 +13,7 @@ Documentation for the ID Agents multi-agent orchestration platform.
 ## Guides
 
 - [Interactive Agent Guide](./guides/interactive-agent.md) - Run the interactive CLI
-- [Sync Command Guide](./guides/sync-command.md) - Update a running team without losing sessions (`/sync` vs `/deploy`)
+- [Sync Command Guide](./guides/sync-command.md) - `/sync` is REMOVED; what replaced it (`/diff`, `/agents spawn|remove`, `/export`, `/import`)
 - [Admin Control Guide](./guides/idagents-admin-control.md) - Programmatic team management via `/remote`, talk-to-manager, and agent reply polling
 - [Task Tracking Guide](./guides/tasks.md) - Task lifecycle, handoff pattern, and stale task verification
 - [News Feed Guide](./guides/news-feed.md) - Loop-safe message channel and multi-reply catch-all
