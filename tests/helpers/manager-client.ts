@@ -36,8 +36,8 @@ function readEnvFile(): Record<string, string> {
 
 const envVars = readEnvFile();
 
-// Manager API runs on port 3100 by default (for default team)
-const MANAGER_URL = process.env.MANAGER_URL || 'http://localhost:3100';
+// Manager API runs on port 4100 by default (for default team)
+const MANAGER_URL = process.env.MANAGER_URL || 'http://localhost:4100';
 const API_KEY = process.env.ID_CONTROL_API_KEY || envVars.ID_CONTROL_API_KEY;
 
 interface ApiResponse<T = unknown> {

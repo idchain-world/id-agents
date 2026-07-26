@@ -23,7 +23,7 @@ import {
 } from '../helpers/manager-client.js';
 
 // Manager URL for setup/cleanup (the real manager)
-const MANAGER_URL = process.env.MANAGER_URL || 'http://localhost:3100';
+const MANAGER_URL = process.env.MANAGER_URL || 'http://localhost:4100';
 
 // Test manager runs on a different port (simulating external client)
 const TEST_MANAGER_PORT = 5555;
