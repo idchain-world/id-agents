@@ -8,9 +8,19 @@
  * passes `token_id: tokenIdArg || undefined` to skip the column.
  *
  * The Postgres repo used to write all five columns unconditionally with
- * `?? null`, so a rename nulled token_id/domain/endpoint/metadata and a
- * /meta set endpoint nulled the agent's NAME. sqlite built a partial UPDATE
- * and was correct. The two backends silently disagreed.
+ * `?? null`. sqlite built a partial UPDATE and was correct, so the two
+ * backends disagreed and the bug never reproduced in local dev.
+ *
+ * The old Postgres behaviour had two distinct symptoms, and the difference is
+ * the whole severity story:
+ *
+ *   - Calls that DID include `name` ({name}-only renames) nulled token_id,
+ *     domain, endpoint and the whole metadata JSON — silent data loss.
+ *   - Calls that did NOT include `name` (/meta set endpoint, /meta setid)
+ *     tried to write `name = NULL` against `name text NOT NULL`
+ *     (src/db/migrations/postgres.ts:208), so they raised a constraint
+ *     violation and failed loudly. Those commands were simply broken on
+ *     Postgres; they never silently corrupted a row.
  *
  * These tests assert the column SET each backend emits for the same input, so
  * a regression in either one is a failure rather than a divergence nobody
@@ -60,7 +70,13 @@ async function sqliteUpdate(fields: Fields) {
 // The real call sites, transcribed from agent-manager-db.ts.
 const CALL_SITES: Array<{ site: string; fields: Fields; touches: string[] }> = [
   {
-    site: '/update --name and PATCH /agents/:id/metadata rename (:3508, :6912)',
+    // Both pass {name} only. PATCH /agents/:id/metadata (:3508) has no
+    // following updateMetadata, so it lost the whole metadata blob — and if
+    // the request carried both `wallet` and `name`, the wallet write at :3502
+    // landed first and was then destroyed by the rename. The CLI /update
+    // --name path (:6959) calls updateMetadata afterwards at :6970 and so
+    // restored metadata; it still lost token_id/domain/endpoint.
+    site: '/update --name and PATCH /agents/:id/metadata rename (:3508, :6959)',
     fields: { name: 'renamed' },
     touches: ['name'],
   },
@@ -95,8 +111,8 @@ describe('updateIdentity is a partial update on both backends', () => {
   }
 
   it('never nulls the name column when name was not supplied', async () => {
-    // The most destructive form of the old bug: /meta set endpoint wiped the
-    // agent's name, which is the routing key for every by-name lookup.
+    // Old behaviour wrote `name = NULL` here, which `name text NOT NULL`
+    // rejected — so /meta set endpoint failed outright on Postgres.
     const [call] = await pgUpdate({ endpoint: 'http://host:1234' });
     expect(call.sql).not.toContain('name');
     expect(call.params).not.toContain(null);
