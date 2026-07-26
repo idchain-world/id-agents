@@ -16,6 +16,7 @@ import yaml from 'js-yaml';
 
 import {
   AVATAR_EXTS,
+  COLUMN_CONFIG_KEY,
   MAX_AVATAR_BYTES,
   WALLET_EXPORT_WARNING,
   buildAgentEntry,
@@ -25,7 +26,11 @@ import {
   exportedColumns,
   formatExportResult,
 } from '../../src/lib/export-team-config.js';
-import { NEVER_EXPORT_COLUMNS } from '../../src/lib/metadata-taxonomy.js';
+import {
+  NEVER_EXPORT_COLUMNS,
+  classifyAgentColumn,
+  listClassifiedColumns,
+} from '../../src/lib/metadata-taxonomy.js';
 
 let tmp = '';
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'export-test-')); });
@@ -52,6 +57,33 @@ describe('column allow-list is derived from the taxonomy (§5.3, acceptance 5a)'
     for (const c of ['name', 'model', 'runtime', 'working_directory', 'token_id', 'domain']) {
       expect(cols).toContain(c);
     }
+  });
+
+  // The three assertions above pass even if the taxonomy gate is deleted, because
+  // COLUMN_CONFIG_KEY happens to list exactly the config/identifier columns. These
+  // two pin the gate itself, so a future divergence is a test failure, not a leak.
+  it('drops a column the classifier demotes, even though it is still in the rename map', () => {
+    const demoted = (column: string) =>
+      column === 'token_id' ? 'never' : classifyAgentColumn(column);
+
+    expect(exportedColumns()).toContain('token_id');
+    expect(exportedColumns(demoted)).not.toContain('token_id');
+    // and only that one column moves
+    expect(exportedColumns(demoted)).toEqual(exportedColumns().filter((c) => c !== 'token_id'));
+  });
+
+  it('the rename map and the taxonomy agree exactly, in both directions', () => {
+    const fromTaxonomy = listClassifiedColumns().filter((c) => {
+      const klass = classifyAgentColumn(c);
+      return klass === 'config' || klass === 'identifier';
+    });
+    const fromMap = Object.keys(COLUMN_CONFIG_KEY);
+
+    // A config column with no rename entry would be dropped silently — the exact
+    // data-loss §3.1 rule 1 exists to prevent.
+    expect(fromTaxonomy.filter((c) => !fromMap.includes(c))).toEqual([]);
+    // A rename entry for a non-config column is how a credential would get out.
+    expect(fromMap.filter((c) => !fromTaxonomy.includes(c))).toEqual([]);
   });
 });
 

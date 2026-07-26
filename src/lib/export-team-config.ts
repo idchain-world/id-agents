@@ -71,7 +71,7 @@ export interface ExportResult {
 }
 
 /** Column name -> config field name. Renames only; membership is the taxonomy's call. */
-const COLUMN_CONFIG_KEY: Readonly<Record<string, string>> = Object.freeze({
+export const COLUMN_CONFIG_KEY: Readonly<Record<string, string>> = Object.freeze({
   name: 'name',
   type: 'type',
   model: 'model',
@@ -95,11 +95,19 @@ const METADATA_CONFIG_KEY: Readonly<Record<string, string>> = Object.freeze({
  * decided by `classifyAgentColumn`, so `api_key`, `ssh_target` and
  * `internal_endpoint_url` (class `never`) can never appear, and neither can a
  * column nobody has classified.
+ *
+ * `classify` is injectable ONLY so the taxonomy gate can be tested. Today it and
+ * `COLUMN_CONFIG_KEY` cover exactly the same nine columns, so with the real
+ * classifier the gate is unobservable — remove it and every output-level
+ * assertion still passes. The seam lets a test demote a column and prove the
+ * gate, not the rename map, is what drops it.
  */
-export function exportedColumns(): string[] {
+export function exportedColumns(
+  classify: (column: string) => string = classifyAgentColumn,
+): string[] {
   return listClassifiedColumns()
     .filter((column) => {
-      const klass = classifyAgentColumn(column);
+      const klass = classify(column);
       return klass === 'config' || klass === 'identifier';
     })
     .filter((column) => Object.prototype.hasOwnProperty.call(COLUMN_CONFIG_KEY, column));
