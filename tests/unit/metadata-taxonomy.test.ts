@@ -49,6 +49,14 @@ const SPEC_METADATA: ReadonlyArray<[string, MetadataClass]> = [
   ['endpoint', 'derived'],
   ['local', 'derived'],
   ['agent_account', 'identifier'],
+  // The DMZ posture keys. Absent from the spec table because zero live rows
+  // carry them; classified `config` by cto decision 2026-07-26.
+  ['mesh_member', 'config'],
+  ['mesh_reachable', 'config'],
+  ['public_endpoint', 'config'],
+  ['dmz', 'config'],
+  ['allowed_inbound', 'config'],
+  ['allowed_outbound', 'config'],
 ];
 
 // ---------------------------------------------------------------------------
@@ -113,20 +121,15 @@ describe('classifyMetadataKey — §3', () => {
   });
 
   /**
-   * These six are written by the public-agent-remote branch of
-   * POST /agents/register (agent-manager-db.ts:3135-3143) but carried by zero
+   * The six DMZ posture keys, written by the public-agent-remote branch of
+   * POST /agents/register (agent-manager-db.ts:3135-3143) and carried by zero
    * live rows, so §3 — derived from a database snapshot — never saw them.
    *
-   * This test pins the CURRENT behaviour, which is that they are unclassified.
-   * It is a tripwire, not an endorsement: classifying any of them makes this
-   * test fail, which is the point. The decision is owed before export ships.
-   *
-   * `mesh_member` is the urgent one. It gates inter-agent delivery at
-   * agent-manager-db.ts:1288 as `metadata?.mesh_member !== false`, so ABSENT
-   * means mesh-member. Dropping it from an export fails OPEN: a DMZ agent
-   * exported and re-imported comes back mesh-reachable.
+   * They were previously pinned `unknown` as a tripwire. cto classified all
+   * six as `config` on 2026-07-26, and updating these assertions is the
+   * deliberate second half of the two-place edit the tripwire existed to force.
    */
-  const AWAITING_CLASSIFICATION = [
+  const DMZ_POSTURE_KEYS = [
     'mesh_member',
     'mesh_reachable',
     'public_endpoint',
@@ -135,12 +138,23 @@ describe('classifyMetadataKey — §3', () => {
     'allowed_outbound',
   ];
 
-  it.each(AWAITING_CLASSIFICATION)(
-    'pins "%s" as unknown — written by code, absent from §3, decision pending',
-    (key) => {
-      expect(classifyMetadataKey(key)).toBe('unknown');
-    },
-  );
+  it.each(DMZ_POSTURE_KEYS)('classifies "%s" as config so it survives export', (key) => {
+    expect(classifyMetadataKey(key)).toBe('config');
+    // Specifically not `unknown` — an unknown key is dropped by the exporter.
+    expect(classifyMetadataKey(key)).not.toBe('unknown');
+  });
+
+  it('classifies mesh_member as config — dropping it would fail OPEN', () => {
+    // The gate at agent-manager-db.ts:1288 reads `mesh_member !== false`, so an
+    // ABSENT key means mesh-member. If export dropped it, a DMZ agent would
+    // round-trip back mesh-reachable with its 403 gate silently gone.
+    expect(classifyMetadataKey('mesh_member')).toBe('config');
+
+    // This does NOT close that fail-open and must not be read as closing it:
+    // legacy rows never carried the key, so absent-means-member remains live
+    // for pre-existing DMZ rows regardless of how export behaves. The
+    // gate-side fix is tracked as its own task.
+  });
 
   /**
    * Three more keys with dedicated writers that the 46-agent snapshot missed

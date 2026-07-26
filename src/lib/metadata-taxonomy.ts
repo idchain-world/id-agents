@@ -82,6 +82,34 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   // --- identifier: names something, grants nothing ---
   agent_account: 'identifier',           // 1 — an Ethereum address (D10)
 
+  // --- config-derived: the DMZ posture stamped at manager-join ---
+  // Written by the public-agent-remote branch of POST /agents/register
+  // (agent-manager-db.ts:3135-3143). Zero live rows carry them — the one live
+  // remote agent predates that code — which is why §3, derived from a database
+  // snapshot, could not list them. Found by reading the writer instead.
+  //
+  // CTO DECISION 2026-07-26: all six are `config`. They have a deterministic
+  // writer, they are caller-supplied configuration, and they must survive
+  // export.
+  //
+  // `mesh_member` is why this mattered. It gates inter-agent delivery at
+  // agent-manager-db.ts:1288 as `metadata?.mesh_member !== false`, so ABSENT
+  // MEANS MESH-MEMBER. Left unclassified, export would drop it and a DMZ agent
+  // would come back from a round-trip mesh-reachable, with a 403 gate silently
+  // removed — a fail-open privilege grant.
+  //
+  // Classifying them does NOT close that fail-open, and must not be mistaken
+  // for a fix. Legacy rows never carried the key, so absent-means-member stays
+  // live for every pre-existing DMZ row even with a perfect export. The
+  // gate-side fix (`=== true`, or an explicit default injected at import) is
+  // tracked separately and is deliberately not part of this module.
+  mesh_member: 'config',                 // 0
+  mesh_reachable: 'config',              // 0
+  public_endpoint: 'config',             // 0
+  dmz: 'config',                         // 0
+  allowed_inbound: 'config',             // 0
+  allowed_outbound: 'config',            // 0
+
   // DELIBERATELY ABSENT, classify as `unknown`:
   //   alias  (0 rows — but the highest-consequence omission here)
   //     Written by the `/identity --name` rename path
@@ -109,16 +137,6 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //     verbatim (agent-manager-db.ts:3248). `role` is a field of
   //     AgentCatalog and belongs at metadata.catalog.role, so the
   //     top-level copy is a stray.
-  //
-  //   mesh_member, mesh_reachable, public_endpoint, dmz,
-  //   allowed_inbound, allowed_outbound
-  //     Written by the public-agent-remote branch of POST /agents/register
-  //     (agent-manager-db.ts:3135-3143). Zero live rows carry them, which is
-  //     why §3 — derived from a snapshot — does not list them. They await a
-  //     deliberate classification decision. See the pinning test in
-  //     tests/unit/metadata-taxonomy.test.ts, and note that `mesh_member` is
-  //     read as an access gate at agent-manager-db.ts:1288 where ABSENT means
-  //     mesh-member, so dropping it on export fails OPEN.
   //
   //   talkTimeout  (0 rows)
   //     A declared config-file field (config-parser.ts:97, merged from
