@@ -253,6 +253,25 @@ export function exportAvatars(
   return { copied, warnings };
 }
 
+/**
+ * §5.1 default path: an explicit argument wins, else the team's recorded
+ * `last_config_path`, else `<baseWorkDir>/teams/<team>/<team>.yaml`.
+ *
+ * Kept here rather than in the command handler so the precedence is testable
+ * without standing up a manager, and so there is exactly one implementation of
+ * it when auto-export (§5.4) needs the same fallback with a different filename.
+ */
+export function resolveExportPath(
+  explicitPath: string | undefined,
+  lastConfigPath: unknown,
+  baseWorkDir: string,
+  teamName: string,
+): string {
+  if (typeof explicitPath === 'string' && explicitPath.trim()) return explicitPath.trim();
+  if (typeof lastConfigPath === 'string' && lastConfigPath.trim()) return lastConfigPath.trim();
+  return path.join(baseWorkDir, 'teams', teamName, `${teamName}.yaml`);
+}
+
 export interface ExportOptions {
   teamName: string;
   agents: AgentRowLike[];

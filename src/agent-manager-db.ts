@@ -13,6 +13,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import { homedir } from 'os';
 import { createServer as createHttpServer, type Server as HttpServer } from 'http';
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, copyFileSync, statSync, openSync, closeSync } from 'fs';
 import { execFileSync, spawn } from 'child_process';
@@ -29,6 +30,11 @@ import fetch from 'node-fetch';
 import type { AgentHandles, PluginConfig, DeployConfig, HeartbeatConfig, CalendarSpec, ScheduleDeliveryMode } from './config-parser.js';
 import { PROFILE_BIO_MAX_LENGTH, validateAgentHandles } from './config-parser.js';
 import { writeProfileToConfig } from './lib/profile-config-write.js';
+import {
+  exportTeamConfig,
+  resolveExportPath,
+  type ScheduleLike,
+} from './lib/export-team-config.js';
 import {
   processConfig,
   copyAgentDirOverlay,
@@ -5271,6 +5277,52 @@ export class AgentManagerDb {
             agents: agentResults
           }
         };
+      }
+
+      // /export <team> [path] — write a config YAML from the database (§5.1).
+      // Deliberately thin: this reads rows and hands them to
+      // lib/export-team-config.ts. Every decision about WHAT may be written —
+      // the column allow-list, the metadata classes, the §5.6 warning, the
+      // .bak-then-overwrite, the result shape — lives in that module, so the
+      // handler cannot drift away from what the tests prove.
+      case 'export': {
+        const requestedTeam = args[0];
+        if (!requestedTeam) {
+          return { ok: false, error: 'Usage: /export <team> [path]' };
+        }
+        const team = await this.db.teams.getTeamByName(requestedTeam);
+        if (!team) {
+          return { ok: false, error: `Team "${requestedTeam}" not found` };
+        }
+
+        const agents = await this.dbListAgents(team.id);
+        const schedulesByAgent: Record<string, ScheduleLike[]> = {};
+        for (const agent of agents) {
+          schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
+        }
+
+        const teamConfig = await this.db.teams.getConfig(team.id);
+        const targetPath = resolveExportPath(
+          args[1],
+          teamConfig.last_config_path,
+          this.baseWorkDir,
+          team.name,
+        );
+        // §5.2.1: the avatar mirror is a sibling of the config file, and the
+        // source is the manager's profiles tree.
+        const avatarsRoot = path.join(path.dirname(targetPath), 'avatars');
+        const profilesRoot = path.join(homedir(), '.id-agents', 'profiles');
+
+        const result = exportTeamConfig({
+          teamName: team.name,
+          agents: agents as unknown as Parameters<typeof exportTeamConfig>[0]['agents'],
+          targetPath,
+          schedulesByAgent,
+          org: teamConfig.org,
+          profilesRoot,
+          avatarsRoot,
+        });
+        return { ok: true, result };
       }
 
       case 'delete': {
