@@ -162,10 +162,12 @@ describe('classifyMetadataKey — §3', () => {
    * unknown, and classifying any of them is meant to fail this test.
    */
   it('pins "alias" as unknown — the stashed display name (agent-manager-db.ts:6908)', () => {
-    // The rename path moves the OLD name here, and 21 sites across six files
-    // resolve display name as `metadata.alias || agent.name`. Dropping it on
-    // export makes a renamed agent silently display its new row name instead —
-    // see the fuller note in the module, which also covers sync.ts:206.
+    // The rename path moves the OLD name here. Re-counted 2026-07-26: 24 direct
+    // `metadata.alias` reads across 5 files plus 31 reads of the flattened
+    // `.alias` API field across 7 files — 55 across 10 files, excluding the
+    // same-named homonyms (normalizeAlias, resolveModelAlias, agentAlias).
+    // Dropping it on export makes a renamed agent silently display its new row
+    // name instead — see the fuller note in the module, which covers sync.ts:206.
     expect(classifyMetadataKey('alias')).toBe('unknown');
   });
 
@@ -177,7 +179,8 @@ describe('classifyMetadataKey — §3', () => {
   });
 
   it('pins "wallet_address" as unknown — D7 runtime or D10 identifier, undecided', () => {
-    // Written by PUT /agents/:id (agent-manager-db.ts:3497). Distinct from the
+    // Written by PATCH /agents/:id/metadata (agent-manager-db.ts:3497) — not
+    // "PUT /agents/:id", which is not a real route. Distinct from the
     // `wallet` opt-in boolean, which IS classified config.
     expect(classifyMetadataKey('wallet_address')).toBe('unknown');
     expect(classifyMetadataKey('wallet')).toBe('config');

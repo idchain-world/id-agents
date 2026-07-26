@@ -114,12 +114,18 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //   alias  (0 rows — but the highest-consequence omission here)
   //     Written by the `/identity --name` rename path
   //     (agent-manager-db.ts:6908) as `alias = alias || <previous name>`, so it
-  //     preserves an agent's ORIGINAL name across a rename. 21 sites across 7
-  //     files read it to resolve a display name: 13 off the column itself as
-  //     `metadata.alias || agent.name` (agent-manager-db.ts, checkin-service.ts,
-  //     scheduler-service.ts, sync.ts) and 8 off the flattened `.alias` field
-  //     the API serves back (interactive-agent-cli.ts, core/agent-identifier.ts,
-  //     start-agent-manager.ts) — so an export bug reaches the CLI too.
+  //     preserves an agent's ORIGINAL name across a rename.
+  //     Blast radius, re-counted 2026-07-26 (supersedes an earlier "21 sites
+  //     across 6-7 files", and also a "58 across 10" that wrongly swept in the
+  //     same-named homonyms normalizeAlias / resolveModelAlias / agentAlias /
+  //     walletAlias / isValidAlias): 24 direct reads of `metadata.alias` across
+  //     5 files (agent-manager-db.ts, sync.ts, checkin-service.ts,
+  //     scheduler-service.ts, db/repos/sqlite/agents-repo.ts) PLUS 31 reads of
+  //     the flattened `.alias` field the API serves back, across 7 files
+  //     (agent-manager-db.ts, interactive-agent-cli.ts, claude-agent-server.ts,
+  //     core/agent-identifier.ts, start-agent-manager.ts, and both agents-repo
+  //     implementations) — 55 reads across 10 files, so an export bug here
+  //     reaches the CLI too.
   //     §3 could not have seen it: no live row has been renamed, which is also
   //     why token_id and domain are 0 (§3.2). It is not config-derived either,
   //     so re-deriving §3 from config-parser.ts would not surface it.
@@ -146,8 +152,10 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //     independently of export; classify it when that is fixed.
   //
   //   wallet_address  (0 rows)
-  //     Written by PUT /agents/:id with a `wallet` body
-  //     (agent-manager-db.ts:3497). Ambiguous on purpose: D7 says wallets are
+  //     Written by PATCH /agents/:id/metadata with a `wallet` body
+  //     (agent-manager-db.ts:3497). Corrected 2026-07-26: earlier notes said
+  //     "PUT /agents/:id", which is not a route that exists — verified by
+  //     reading the enclosing handler. Ambiguous on purpose: D7 says wallets are
   //     never exported (cf. ows_wallet/ows_address, `runtime`), D10 says a bare
   //     address only names a thing (cf. agent_account, `identifier`). Note
   //     `metadata.wallet` above is the opt-in BOOLEAN, a different key.
