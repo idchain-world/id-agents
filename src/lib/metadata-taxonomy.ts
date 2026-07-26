@@ -83,6 +83,26 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   agent_account: 'identifier',           // 1 — an Ethereum address (D10)
 
   // DELIBERATELY ABSENT, classify as `unknown`:
+  //   alias  (0 rows — but the highest-consequence omission here)
+  //     Written by the `/identity --name` rename path
+  //     (agent-manager-db.ts:6908) as `alias = alias || <previous name>`, so it
+  //     preserves an agent's ORIGINAL name across a rename. 21 sites across 7
+  //     files read it to resolve a display name: 13 off the column itself as
+  //     `metadata.alias || agent.name` (agent-manager-db.ts, checkin-service.ts,
+  //     scheduler-service.ts, sync.ts) and 8 off the flattened `.alias` field
+  //     the API serves back (interactive-agent-cli.ts, core/agent-identifier.ts,
+  //     start-agent-manager.ts) — so an export bug reaches the CLI too.
+  //     §3 could not have seen it: no live row has been renamed, which is also
+  //     why token_id and domain are 0 (§3.2). It is not config-derived either,
+  //     so re-deriving §3 from config-parser.ts would not surface it.
+  //     Dropping it on export is NOT cosmetic: a renamed agent round-trips
+  //     under its new name, all 21 readers switch display names at once, and
+  //     sync.ts:206 — which indexes running rows BY alias — stops matching the
+  //     config entry and can treat the agent as new.
+  //     Classifying it needs an export-rule decision, not just a class: if
+  //     `alias` is the name the config should carry, then the exported agent
+  //     name is `alias`, not the `name` column. That is a §3.1 call. PENDING.
+  //
   //   role  (1 row, on `cto` in team `default`)
   //     §3.1 rule 2. It has no dedicated writer: it arrives through
   //     POST /agents/register, which spreads caller-supplied `metadata`
@@ -99,6 +119,20 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //     tests/unit/metadata-taxonomy.test.ts, and note that `mesh_member` is
   //     read as an access gate at agent-manager-db.ts:1288 where ABSENT means
   //     mesh-member, so dropping it on export fails OPEN.
+  //
+  //   talkTimeout  (0 rows)
+  //     A declared config-file field (config-parser.ts:97, merged from
+  //     `defaults` at :1286) read back as `metadata.talkTimeout` to set
+  //     ID_TALK_TIMEOUT (agent-manager-db.ts:588). No deploy path writes it
+  //     into metadata today, so the config→metadata leg is missing
+  //     independently of export; classify it when that is fixed.
+  //
+  //   wallet_address  (0 rows)
+  //     Written by PUT /agents/:id with a `wallet` body
+  //     (agent-manager-db.ts:3497). Ambiguous on purpose: D7 says wallets are
+  //     never exported (cf. ows_wallet/ows_address, `runtime`), D10 says a bare
+  //     address only names a thing (cf. agent_account, `identifier`). Note
+  //     `metadata.wallet` above is the opt-in BOOLEAN, a different key.
 });
 
 /**

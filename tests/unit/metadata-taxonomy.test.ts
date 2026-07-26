@@ -141,6 +141,33 @@ describe('classifyMetadataKey — §3', () => {
       expect(classifyMetadataKey(key)).toBe('unknown');
     },
   );
+
+  /**
+   * Three more keys with dedicated writers that the 46-agent snapshot missed
+   * because each has zero live rows. Same tripwire contract as above: pinned
+   * unknown, and classifying any of them is meant to fail this test.
+   */
+  it('pins "alias" as unknown — the stashed display name (agent-manager-db.ts:6908)', () => {
+    // The rename path moves the OLD name here, and 21 sites across six files
+    // resolve display name as `metadata.alias || agent.name`. Dropping it on
+    // export makes a renamed agent silently display its new row name instead —
+    // see the fuller note in the module, which also covers sync.ts:206.
+    expect(classifyMetadataKey('alias')).toBe('unknown');
+  });
+
+  it('pins "talkTimeout" as unknown — a config field with no writer into metadata', () => {
+    // Declared at config-parser.ts:97 and read back at agent-manager-db.ts:588
+    // as ID_TALK_TIMEOUT, but no deploy path ever puts it in metadata. The
+    // config→metadata leg is broken independently of export.
+    expect(classifyMetadataKey('talkTimeout')).toBe('unknown');
+  });
+
+  it('pins "wallet_address" as unknown — D7 runtime or D10 identifier, undecided', () => {
+    // Written by PUT /agents/:id (agent-manager-db.ts:3497). Distinct from the
+    // `wallet` opt-in boolean, which IS classified config.
+    expect(classifyMetadataKey('wallet_address')).toBe('unknown');
+    expect(classifyMetadataKey('wallet')).toBe('config');
+  });
 });
 
 describe('classifyAgentColumn — §3.2', () => {
