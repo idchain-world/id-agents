@@ -36,6 +36,12 @@ import {
   type ScheduleLike,
 } from './lib/export-team-config.js';
 import {
+  autoExportPath,
+  createAutoExporter,
+  DEFAULT_AUTOEXPORT_DEBOUNCE_MS,
+  type AutoExporter,
+} from './lib/auto-export.js';
+import {
   processConfig,
   copyAgentDirOverlay,
   copyHeartbeatMd,
@@ -353,6 +359,16 @@ export class AgentManagerDb {
   private baseWorkDir: string;
   private db: Db;
   private runningServers: Map<string, AgentRestServer> = new Map(); // key: `${teamId}:${agentId}`
+
+  /**
+   * §5.4 automatic export. Debounce is overridable via env so tests can drive
+   * it without waiting 5s; production never sets it.
+   */
+  private autoExporter: AutoExporter = createAutoExporter({
+    debounceMs: Number(process.env.ID_AUTOEXPORT_DEBOUNCE_MS) || DEFAULT_AUTOEXPORT_DEBOUNCE_MS,
+    onError: (err, team) =>
+      console.warn(`[AutoExport] team "${team}" failed: ${(err as Error)?.message || String(err)}`),
+  });
   private agentRole: 'manager' | 'worker' = 'manager';
   private defaultConfig: DeployConfig['defaults'] | null = null;
   private schedulerService: SchedulerService | null = null;
@@ -978,6 +994,40 @@ export class AgentManagerDb {
 
   private async dbListAgents(teamId: string, includeAutomator: boolean = false): Promise<AgentRow[]> {
     return this.db.agents.list(teamId, includeAutomator);
+  }
+
+  /**
+   * §5.4 — queue an automatic export after a team-composition mutation.
+   *
+   * Fire-and-forget by design. This returns immediately; the write happens
+   * after the debounce window, by which point the triggering mutation has long
+   * since responded. That ordering is what makes "auto-export failure never
+   * fails the mutation" structural rather than a promise we have to keep at
+   * every call site.
+   *
+   * Callers must NOT await this and must not wrap it in their own try/catch —
+   * it cannot throw.
+   */
+  private scheduleAutoExport(teamId: string): void {
+    this.autoExporter.schedule(teamId, async () => {
+      const team = await this.db.teams.getTeam(teamId);
+      if (!team) return; // team deleted between mutation and flush — nothing to write
+      const agents = await this.dbListAgents(teamId);
+      const schedulesByAgent: Record<string, ScheduleLike[]> = {};
+      for (const agent of agents) {
+        schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
+      }
+      const teamConfig = await this.db.teams.getConfig(teamId);
+      exportTeamConfig({
+        teamName: team.name,
+        agents: agents as unknown as Parameters<typeof exportTeamConfig>[0]['agents'],
+        // Hardcoded §5.4 shape. NOT resolveExportPath — that honours
+        // last_config_path, which an automatic write must never touch.
+        targetPath: autoExportPath(this.baseWorkDir, team.name),
+        schedulesByAgent,
+        org: teamConfig.org,
+      });
+    });
   }
 
   private async rebuildLocalClaudeAgent(
@@ -3044,6 +3094,7 @@ export class AgentManagerDb {
           endpoint: url,
           metadata: finalMeta,
         });
+        this.scheduleAutoExport(teamId); // §5.4 — agent create
 
         // Use host paths for local agents
         // If configWorkDir is an absolute path, use it directly (project repo)
@@ -3315,6 +3366,7 @@ export class AgentManagerDb {
         });
       }
 
+      this.scheduleAutoExport(teamId); // §5.4
       res.json({ id: agent.id, name: agent.name, metadata: nextMetadata });
     });
 
@@ -3337,6 +3389,7 @@ export class AgentManagerDb {
         });
       }
 
+      this.scheduleAutoExport(teamId); // §5.4
       res.json({ id: agent.id, name: agent.name, metadata: nextMetadata });
     });
 
@@ -3442,6 +3495,7 @@ export class AgentManagerDb {
         await this.db.agents.updateStatus(agent.id, 'pending', { model });
 
         console.log(`[Manager] Updated model for ${agent.name} to ${model} - restart required`);
+        this.scheduleAutoExport(teamId); // §5.4
 
         res.json({
           id: agent.id,
@@ -3546,6 +3600,7 @@ export class AgentManagerDb {
 
       // Delete record (cascades wallets/news/queries)
       await this.db.agents.deleteAgent(agent.id);
+      this.scheduleAutoExport(teamId); // §5.4
       res.json({ message: 'Agent deleted', id: agent.id, name: agent.name });
       this.broadcastAgentsChanged(teamId, { reason: 'remove', removed: [agent.name] });
     });
@@ -3569,6 +3624,7 @@ export class AgentManagerDb {
         } catch {}
       }
       await this.db.agents.deleteAgent(agent.id);
+      this.scheduleAutoExport(teamId); // §5.4
       res.json({ message: 'Agent deleted', id: agent.id, name: agent.name });
       this.broadcastAgentsChanged(teamId, { reason: 'remove', removed: [agent.name] });
     });
@@ -7624,6 +7680,9 @@ export class AgentManagerDb {
    * the manager shuts down cleanly without leaking timers or sockets.
    */
   async shutdown(): Promise<void> {
+    // Drop any pending auto-export timer first: a debounced write firing into
+    // a half-torn-down manager would read from a closing database.
+    this.autoExporter.dispose();
     if (this.checkinService) {
       this.checkinService.stop();
       this.checkinService = null;
