@@ -75,6 +75,16 @@ export interface AgentsRepository {
   getById(agentId: string): Promise<AgentRow | null>;
 
   /**
+   * EVERY non-deleted row for the team, with no type filtering at all.
+   *
+   * `list()` deliberately hides interactive/virtual and automator rows because
+   * operational callers want the agents you can talk to. Export needs the
+   * opposite guarantee: it must see rows it cannot represent, so it can REPORT
+   * them instead of dropping them silently. Do not use this for display.
+   */
+  listAll(teamId: string): Promise<AgentRow[]>;
+
+  /**
    * Look up the most recent non-deleted agent by exact name match
    * (also checks metadata->>'alias'). Falls back to flexible resolution
    * via parseAgentRef if no exact match.

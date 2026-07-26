@@ -1012,7 +1012,8 @@ export class AgentManagerDb {
     this.autoExporter.schedule(teamId, async () => {
       const team = await this.db.teams.getTeam(teamId);
       if (!team) return; // team deleted between mutation and flush — nothing to write
-      const agents = await this.dbListAgents(teamId);
+      // listAll for the same completeness reason as the /export handler.
+      const agents = await this.db.agents.listAll(teamId);
       const schedulesByAgent: Record<string, ScheduleLike[]> = {};
       for (const agent of agents) {
         schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
@@ -1077,6 +1078,7 @@ export class AgentManagerDb {
     // it can never see the paused schedule we are trying to resume.
     if (!(await this.db.schedules.getDefinition(scheduleId))) return false;
     await this.db.schedules.setActive(scheduleId, enabled);
+    this.scheduleAutoExport(agent.team_id); // §5.4 — schedule mutation
     return true;
   }
 
@@ -3106,6 +3108,7 @@ export class AgentManagerDb {
         if (heartbeat && this.schedulerService) {
           const { definition, agentIds } = heartbeatToSchedule(id, name, heartbeat);
           await this.schedulerService.seedSchedule(definition, agentIds);
+          this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
         }
 
         res.status(201).json({
@@ -4954,11 +4957,13 @@ export class AgentManagerDb {
 
           if (subCmd === 'remove') {
             await this.db.schedules.deleteDefinition(scheduleId);
+            this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
             return { ok: true, result: { removed: scheduleId } };
           }
 
           const active = subCmd === 'resume';
           await this.db.schedules.setActive(scheduleId, active);
+          this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
           return { ok: true, result: { id: scheduleId, active } };
         }
 
@@ -5056,6 +5061,7 @@ export class AgentManagerDb {
             };
 
             await this.schedulerService.seedSchedule(definition, [agent.id]);
+            this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
             return {
               ok: true,
               result: {
@@ -5104,6 +5110,7 @@ export class AgentManagerDb {
           definition.source_key = scheduleKey;
           definition.sender = sender ?? 'schedule';
           await this.schedulerService.seedSchedule(definition, [agent.id]);
+          this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
 
           return {
             ok: true,
@@ -5351,7 +5358,9 @@ export class AgentManagerDb {
           return { ok: false, error: `Team "${requestedTeam}" not found` };
         }
 
-        const agents = await this.dbListAgents(team.id);
+        // listAll, not list(): list() hides interactive/virtual and automator
+        // rows, which silently dropped register-created agents from exports.
+        const agents = await this.db.agents.listAll(team.id);
         const schedulesByAgent: Record<string, ScheduleLike[]> = {};
         for (const agent of agents) {
           schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
@@ -6074,6 +6083,7 @@ export class AgentManagerDb {
         // Re-seed calendar schedules
         if (syncCalendar && syncCalendar.length > 0 && this.schedulerService) {
           await this.db.schedules.deleteBySource('yaml', `calendar:${syncAbsolutePath}:`);
+          this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
           for (let index = 0; index < syncCalendar.length; index++) {
             const spec = syncCalendar[index] as CalendarSpec;
             const targetIds: string[] = [];
@@ -6259,6 +6269,7 @@ export class AgentManagerDb {
         // Re-seed calendar schedules idempotently for this config source.
         if (this.schedulerService) {
           await this.db.schedules.deleteBySource('yaml', `calendar:${absolutePath}:`);
+          this.scheduleAutoExport(teamId); // §5.4 — schedule mutation
         }
 
         for (const agentConfig of agents) {

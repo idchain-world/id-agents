@@ -204,6 +204,37 @@ describe('§5.4 automatic export on mutation', () => {
     expect((row as any)?.model).toBe('claude-opus-5');
   });
 
+  it('fires on schedule add and on schedule remove (§5.4 trigger list)', async () => {
+    // §5.4 lists schedule add/remove as triggers; commit 3 hooked six mutation
+    // sites but no schedule site, so these two paths wrote nothing.
+    const add = await fetch(`${baseUrl}/remote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Id-Team': TEAM, 'X-Id-Admin': '1' },
+      body: JSON.stringify({ command: '/schedule add heartbeat alpha 900 ping' }),
+    });
+    const addBody = await add.json() as any;
+    expect(addBody.ok).toBe(true);
+
+    await settle();
+    expect(fs.existsSync(expectedPath())).toBe(true);
+
+    // Remove the file, then remove the schedule: the delete path must write again.
+    fs.unlinkSync(expectedPath());
+    const schedules = await db.schedules.listSchedulesForAgent('local_alpha');
+    const scheduleId = schedules[0]?.id;
+    expect(scheduleId).toBeTruthy();
+
+    const remove = await fetch(`${baseUrl}/remote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Id-Team': TEAM, 'X-Id-Admin': '1' },
+      body: JSON.stringify({ command: `/schedule remove ${scheduleId}` }),
+    });
+    expect((await remove.json() as any).ok).toBe(true);
+
+    await settle();
+    expect(fs.existsSync(expectedPath())).toBe(true);
+  });
+
   it('shutdown cancels a pending export so no timer outlives the manager', async () => {
     await post('/agents/local_alpha/model', { model: 'claude-opus-5' });
     await manager.shutdown();

@@ -191,6 +191,37 @@ describe('/export command wiring', () => {
     expect(fs.readFileSync(`${target}.bak`, 'utf-8')).toBe('previous: true\n');
   });
 
+  it('reports a register-created virtual agent instead of dropping it silently', async () => {
+    // The live-data bug: db.agents.list() hides interactive/virtual rows, so an
+    // agent like default/cto disappeared from the export with nothing said.
+    await db.agents.create({
+      team_id: teamId, id: 'virtual_cto', name: 'cto', type: 'virtual',
+      model: 'unknown', status: 'registered', created_at: Date.now(),
+      runtime: 'external',
+      metadata: { name: 'cto', service_type: 'REST-AP', role: 'lead/orchestrator' },
+    } as any);
+
+    const target = path.join(outDir, 'complete.yaml');
+    const body = await runCommand(`/export ${TEAM} ${target}`);
+    expect(body.ok).toBe(true);
+
+    // Named in warnings...
+    const joined = (body.result.warnings as string[]).join('\n');
+    expect(joined).toContain('"cto"');
+    expect(joined).toContain('type=virtual');
+
+    // ...not in the file...
+    const doc = yaml.load(fs.readFileSync(target, 'utf-8')) as any;
+    expect(doc.agents.map((a: any) => a.name)).toEqual(['alpha']);
+
+    // ...and every row accounted for: 1 exported + 1 reported === 2 rows.
+    const reported = (body.result.warnings as string[]).filter((w) => w.includes('NOT exported')).length;
+    expect(body.result.agents + reported).toBe(2);
+
+    // The stray top-level `role` key finally surfaces too.
+    expect(body.result.skipped.find((x: any) => x.agent === 'cto')?.keys).toContain('role');
+  });
+
   it('rejects a missing team argument and an unknown team', async () => {
     const noArg = await runCommand('/export');
     expect(noArg.ok).toBe(false);

@@ -167,15 +167,55 @@ export function buildAgentEntry(
   return { entry, skippedKeys };
 }
 
+/**
+ * Can this row be written into a config file at all?
+ *
+ * `type: 'claude'` and `'automator'` are both declarable in `AgentSpec`, and a
+ * `public-agent-remote` row carries `customer_domain` / `public_endpoint_url`,
+ * which are too. Everything else — the `interactive` and `virtual` rows that
+ * `POST /agents/register` creates — has no config representation: there is no
+ * YAML that reproduces an externally-registered agent.
+ *
+ * Those rows must still be ACCOUNTED FOR. §3.1 rule 1 says an unknown metadata
+ * key is reported rather than dropped; the same rule has to hold one level up,
+ * or an entire agent disappears from an export with nothing said. That is
+ * exactly what happened to `default/cto` before this existed.
+ */
+export function isConfigExpressible(row: AgentRowLike): boolean {
+  const type = typeof row.type === 'string' ? row.type : '';
+  if (type !== 'interactive' && type !== 'virtual') return true;
+  return row.runtime === 'public-agent-remote';
+}
+
 /** Assemble the full team config document. `defaults` holds only unanimous values. */
 export function buildTeamConfig(
   teamName: string,
   agents: AgentRowLike[],
   schedulesByAgent: Record<string, ScheduleLike[]> = {},
   org?: unknown,
-): { config: Record<string, unknown>; skipped: ExportResult['skipped'] } {
+): {
+  config: Record<string, unknown>;
+  skipped: ExportResult['skipped'];
+  unrepresentable: Array<{ agent: string; type: string; runtime: string }>;
+} {
   const skipped: ExportResult['skipped'] = [];
-  const entries = agents.map((row) => {
+  const unrepresentable: Array<{ agent: string; type: string; runtime: string }> = [];
+
+  const exportable = agents.filter((row) => {
+    if (isConfigExpressible(row)) return true;
+    unrepresentable.push({
+      agent: String(row.name),
+      type: String(row.type ?? 'unknown'),
+      runtime: String(row.runtime ?? 'unknown'),
+    });
+    // Still walk the metadata: naming the keys that have no home anywhere is
+    // more useful to an operator than "this agent was skipped".
+    const { skippedKeys } = buildAgentEntry(row, []);
+    if (skippedKeys.length) skipped.push({ agent: String(row.name), keys: skippedKeys });
+    return false;
+  });
+
+  const entries = exportable.map((row) => {
     const { entry, skippedKeys } = buildAgentEntry(row, schedulesByAgent[String(row.name)] || []);
     if (skippedKeys.length) skipped.push({ agent: String(entry.name ?? row.name), keys: skippedKeys });
     return entry;
@@ -195,7 +235,7 @@ export function buildTeamConfig(
   if (Object.keys(defaults).length) config.defaults = defaults;
   if (org !== undefined && org !== null) config.org = org;
   config.agents = entries;
-  return { config, skipped };
+  return { config, skipped, unrepresentable };
 }
 
 /**
@@ -285,9 +325,18 @@ export interface ExportOptions {
 /** Write the team config YAML, backing up any existing file first (§5.1). */
 export function exportTeamConfig(options: ExportOptions): ExportResult {
   const { teamName, agents, targetPath, schedulesByAgent = {}, org } = options;
-  const { config, skipped } = buildTeamConfig(teamName, agents, schedulesByAgent, org);
+  const { config, skipped, unrepresentable } = buildTeamConfig(teamName, agents, schedulesByAgent, org);
 
   const warnings: string[] = [WALLET_EXPORT_WARNING];
+  // Every row the config cannot represent is named here. An agent silently
+  // missing from an export is the worst failure this command has, because the
+  // file looks complete.
+  for (const row of unrepresentable) {
+    warnings.push(
+      `Agent "${row.agent}" (type=${row.type}, runtime=${row.runtime}) was NOT exported: ` +
+      `externally-registered agents have no config representation. Re-register it after import.`,
+    );
+  }
   if (options.profilesRoot && options.avatarsRoot) {
     const avatars = exportAvatars(
       teamName,
@@ -307,7 +356,10 @@ export function exportTeamConfig(options: ExportOptions): ExportResult {
       yaml.dump(config, { noRefs: true, lineWidth: 120 }),
   );
 
-  return { ok: true, path: targetPath, agents: agents.length, skipped, warnings };
+  // `agents` counts what was WRITTEN; unrepresentable rows are in `warnings`.
+  // exported + reported === rows handed in, which is the completeness contract.
+  const exportedCount = agents.length - unrepresentable.length;
+  return { ok: true, path: targetPath, agents: exportedCount, skipped, warnings };
 }
 
 /** Human-readable output. §5.6 requires the warning here too, not only in JSON. */

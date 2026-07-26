@@ -196,6 +196,18 @@ export class SqliteAgentsRepo implements AgentsRepository {
     }
   }
 
+  /** Every non-deleted row for the team — no type filter. Export-only; see the interface. */
+  async listAll(teamId: string): Promise<AgentRow[]> {
+    const { rows } = await this.db.query(
+      `SELECT * FROM agents
+       WHERE team_id = ?
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [teamId],
+    );
+    return this.parseRows(rows);
+  }
+
   async list(teamId: string, includeAutomator: boolean = false): Promise<AgentRow[]> {
     const typeFilter = includeAutomator ? '' : `AND type != 'automator'`;
     const { rows } = await this.db.query(

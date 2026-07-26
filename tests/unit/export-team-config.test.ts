@@ -25,6 +25,7 @@ import {
   exportTeamConfig,
   exportedColumns,
   formatExportResult,
+  isConfigExpressible,
 } from '../../src/lib/export-team-config.js';
 import {
   NEVER_EXPORT_COLUMNS,
@@ -155,6 +156,62 @@ describe('metadata classes drive inclusion (§5.3)', () => {
     expect(entry.mesh_member).toBe(false);
     expect(entry.dmz).toBe(true);
     expect(entry.allowed_inbound).toEqual(['public_http']);
+  });
+});
+
+describe('agents that cannot round-trip are REPORTED, never dropped (§3.1 at agent level)', () => {
+  // The bug this exists for: SqliteAgentsRepo.list() hides interactive/virtual
+  // rows, so `default/cto` — register-created, type=virtual — vanished from a
+  // real export with nothing said. A file that looks complete but is missing an
+  // agent is the worst failure this command has.
+  const registerShaped = {
+    name: 'cto', type: 'virtual', runtime: 'external',
+    metadata: { name: 'cto', service_type: 'REST-AP', endpoint: 'http://x', role: 'lead/orchestrator', agent_account: '0xbeef' },
+  };
+
+  it('classifies config-expressible rows correctly', () => {
+    expect(isConfigExpressible({ name: 'a', type: 'claude' })).toBe(true);
+    expect(isConfigExpressible({ name: 'a', type: 'automator' })).toBe(true);
+    // A remote-endpoint row IS expressible: customer_domain/public_endpoint_url
+    // are real config fields.
+    expect(isConfigExpressible({ name: 'a', type: 'virtual', runtime: 'public-agent-remote' })).toBe(true);
+    expect(isConfigExpressible(registerShaped)).toBe(false);
+    expect(isConfigExpressible({ name: 'a', type: 'interactive', runtime: 'external' })).toBe(false);
+  });
+
+  it('names the unexportable agent in warnings and keeps it out of the file', () => {
+    const p = target();
+    const r = exportTeamConfig({
+      teamName: 't',
+      agents: [{ name: 'alpha', type: 'claude', metadata: {} }, registerShaped],
+      targetPath: p,
+    });
+
+    const joined = r.warnings.join('\n');
+    expect(joined).toContain('"cto"');
+    expect(joined).toContain('type=virtual');
+    expect(joined).toContain('runtime=external');
+    expect(joined).toMatch(/NOT exported/);
+
+    const doc = readYaml(p);
+    expect(doc.agents.map((a: any) => a.name)).toEqual(['alpha']);
+  });
+
+  it('accounts for every row handed in: exported + reported === total', () => {
+    const r = exportTeamConfig({
+      teamName: 't',
+      agents: [{ name: 'alpha', type: 'claude', metadata: {} }, registerShaped],
+      targetPath: target(),
+    });
+    const reported = r.warnings.filter((w) => w.includes('NOT exported')).length;
+    expect(r.agents + reported).toBe(2);
+    expect(r.agents).toBe(1);
+  });
+
+  it('still reports the unexportable row\'s unclassified keys, so `role` finally surfaces', () => {
+    const r = exportTeamConfig({ teamName: 't', agents: [registerShaped], targetPath: target() });
+    const entry = r.skipped.find((s) => s.agent === 'cto');
+    expect(entry?.keys).toContain('role');
   });
 });
 

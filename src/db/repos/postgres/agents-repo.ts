@@ -161,6 +161,19 @@ export class PgAgentsRepo implements AgentsRepository {
   // List / count
   // ---------------------------------------------------------------------------
 
+  /** Every non-deleted row for the team — no type filter. Export-only; see the interface. */
+  async listAll(teamId: string): Promise<AgentRow[]> {
+    const r = await this.db.query<AgentRow>(
+      `SELECT *
+       FROM agents
+       WHERE team_id = $1
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC`,
+      [teamId],
+    );
+    return r.rows;
+  }
+
   async list(teamId: string, includeAutomator?: boolean): Promise<AgentRow[]> {
     const typeFilter = includeAutomator ? '' : `AND type != 'automator'`;
     const r = await this.db.query<AgentRow>(
