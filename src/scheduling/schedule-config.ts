@@ -71,6 +71,15 @@ ${spec.description.trim()}`;
 /** Generic message sent for new-model heartbeats (agent reads its own HEARTBEAT.md) */
 export const HEARTBEAT_GENERIC_MESSAGE = 'Heartbeat: read your HEARTBEAT.md checklist and act on anything that needs attention. If nothing needs action, respond with HEARTBEAT_OK.';
 
+/**
+ * The schedule id for an agent's heartbeat. Deterministic, so a heartbeat
+ * schedule can be looked up directly by id without a scan — `listSchedulesForAgent`
+ * filters to active rows only and therefore cannot find a PAUSED heartbeat.
+ */
+export function heartbeatScheduleId(agentId: string): string {
+  return `hb_${agentId}`;
+}
+
 export function heartbeatToSchedule(
   agentId: string,
   agentName: string,
@@ -84,7 +93,7 @@ export function heartbeatToSchedule(
   const now = nowSec ?? Math.floor(Date.now() / 1000);
 
   const definition: ScheduleDefinitionRow = {
-    id: `hb_${agentId}`,
+    id: heartbeatScheduleId(agentId),
     kind: 'heartbeat',
     title: `Heartbeat: ${agentName}`,
     description: null,

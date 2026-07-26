@@ -80,7 +80,7 @@ import { resolveNewsTrigger } from './core/messaging-service.js';
 import { isCodexReasoningEffort, type CodexReasoningEffort, type HarnessType } from './harness/types.js';
 import { SchedulerService, synthesizeForceHeartbeat } from './scheduling/scheduler-service.js';
 import type { DispatchTarget } from './scheduling/schedule-types.js';
-import { heartbeatToSchedule, calendarToSchedule, validateIntervalSeconds, HEARTBEAT_GENERIC_MESSAGE } from './scheduling/schedule-config.js';
+import { heartbeatToSchedule, heartbeatScheduleId, calendarToSchedule, validateIntervalSeconds, HEARTBEAT_GENERIC_MESSAGE } from './scheduling/schedule-config.js';
 import {
   getAvailableRuntimes,
   getDefaultModelForRuntime,
@@ -983,6 +983,34 @@ export class AgentManagerDb {
    * Resolve agents matching an identifier pattern
    * Returns all matches for ambiguity detection
    */
+  /**
+   * Write the two halves of "is this heartbeat on?" together, never separately.
+   *
+   * `metadata.heartbeat` and the schedule's `active` flag answer two different
+   * questions — "should this agent be beating?" and "is this row firing?" — but
+   * they are ONE fact and must not diverge. They are read by different queries:
+   * `findHeartbeat()` reads the metadata flag, `listSchedulesForAgent()` filters
+   * on `active`, and `listAllDefinitions()` (which feeds the Heartbeats view)
+   * filters on neither. Setting only the metadata flag would leave `/heartbeat
+   * <agent>` and `/heartbeats` listing an agent whose schedule lookup comes back
+   * empty — a degraded row with runCount 0. Setting only `active` would leave the
+   * agent out of those listings while its row kept the opposite flag.
+   *
+   * Hence one helper. Do not inline these two writes back into the call sites.
+   *
+   * Returns false when there is no schedule row to flip (a heartbeat disabled
+   * before this became a pause was deleted outright, so first enable must seed).
+   */
+  private async setHeartbeatEnabled(agent: AgentRow, enabled: boolean): Promise<boolean> {
+    await this.db.agents.updateMetadata(agent.id, { ...agent.metadata, heartbeat: enabled });
+    const scheduleId = heartbeatScheduleId(agent.id);
+    // By id, not `listSchedulesForAgent`: that query filters to active rows, so
+    // it can never see the paused schedule we are trying to resume.
+    if (!(await this.db.schedules.getDefinition(scheduleId))) return false;
+    await this.db.schedules.setActive(scheduleId, enabled);
+    return true;
+  }
+
   private async dbResolveAgents(teamId: string, ref: string): Promise<AgentRow[]> {
     return this.db.agents.resolve(teamId, ref);
   }
@@ -5064,9 +5092,17 @@ export class AgentManagerDb {
           let hbSchedule = schedules.find(s => s.source_key === `heartbeat:${agent.id}`);
           if (!hbSchedule) {
             if (!force) {
+              // `listSchedulesForAgent` is active-only, so "not found" now covers two
+              // cases: no schedule at all, or one that is merely PAUSED by
+              // `/heartbeat disable`. Saying "has no heartbeat schedule" for a paused
+              // one would be untrue, so name the actual state. Behaviour is unchanged
+              // — both still refuse without --force.
+              const paused = await this.db.schedules.getDefinition(heartbeatScheduleId(agent.id));
               return {
                 ok: false,
-                error: `Agent "${agent.name}" has no heartbeat schedule. Re-run with --force to fire a synthesized generic beat.`,
+                error: paused
+                  ? `Agent "${agent.name}" has a disabled heartbeat schedule. Re-enable it with /heartbeat enable ${agent.name}, or re-run with --force to fire a synthesized generic beat.`
+                  : `Agent "${agent.name}" has no heartbeat schedule. Re-run with --force to fire a synthesized generic beat.`,
               };
             }
             hbSchedule = synthesizeForceHeartbeat(agent.id, agent.name);
@@ -5113,7 +5149,21 @@ export class AgentManagerDb {
           }
           const agent = matches[0];
 
+          // Enable/disable are a RESUME/PAUSE pair over one schedule row, never a
+          // create/delete pair. Deleting on disable made the agent vanish from the
+          // Heartbeats view instead of going idle, threw away the user's configured
+          // interval and message, and forced enable to rebuild from HEARTBEAT.md —
+          // which fails outright once that file is gone. Pausing cannot fail that way.
+          const existing = await this.db.schedules.getDefinition(heartbeatScheduleId(agent.id));
+
           if (subCmd === 'enable') {
+            if (existing) {
+              // Resume in place — keep the configured interval/message rather than
+              // re-deriving them from the file, which may have changed or gone.
+              await this.setHeartbeatEnabled(agent, true);
+              return { ok: true, result: { message: `Heartbeat enabled for ${agent.name} (interval: ${existing.interval_seconds}s)` } };
+            }
+            // No schedule yet — this is a first enable, so seed one from the file.
             if (!agent.working_directory) {
               return { ok: false, error: `Agent "${agent.name}" has no working directory` };
             }
@@ -5129,12 +5179,11 @@ export class AgentManagerDb {
             }
             return { ok: true, result: { message: `Heartbeat enabled for ${agent.name} (interval: ${config.interval}s)` } };
           } else {
-            // Disable heartbeat
-            const newMetadata = { ...agent.metadata, heartbeat: false };
-            await this.db.agents.updateMetadata(agent.id, newMetadata);
-            if (this.schedulerService) {
-              await this.schedulerService.removeAgentSchedules(agent.id);
-            }
+            // Disable: pause the row so it stays visible (idle) and re-armable.
+            // Straight to the DB rather than through schedulerService — `setActive`
+            // is a plain row update, and the scheduler only ever reads ACTIVE
+            // definitions on tick, so a paused row simply stops firing.
+            await this.setHeartbeatEnabled(agent, false);
             return { ok: true, result: { message: `Heartbeat disabled for ${agent.name}` } };
           }
         }
