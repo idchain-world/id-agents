@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.110-beta
+
+### Changed — the database is the source of truth; `/sync` is removed
+
+Config files were the authority: `/deploy` could write over a live team, and a changed `workingDirectory` was treated as destroy-and-recreate, so an ordinary config edit silently destroyed an agent's identity and the pointer to its wallet. `/sync` reconciled a file against a running team, which meant its correctness depended on a diff engine holding two mutable sources in agreement.
+
+The database is now the source of truth and config files are import/export artifacts.
+
+- **`/deploy` only creates.** It refuses an existing team with a 409 and mutates nothing on refusal. There is no override flag. The occupancy check reads every row, so a team holding only a register-created `virtual` agent still counts as live.
+- **`/sync` is removed.** Its comparison half survives as `/diff <team> <config>`, which reports drift and changes nothing. The separate `id-agents sync <config>` workspace CLI is a different command and is unaffected.
+- **`/export <team> [path]`** writes a config from the database, backing up any existing file first. **`/import <file> [--team <name>]`** creates a new team from one, reusing the deploy path so the refusal contract applies there too.
+- **Automatic export on mutation.** Every composition change leaves behind a reconstructable file at `<baseWorkDir>/teams/<team>/<team>.autoexport.yaml`. Debounced per team, and a failed export can never fail the operation that triggered it. It deliberately does not use the manual export path, so an automatic process cannot overwrite a file a human chose.
+- **Change a live team** with `/model`, `/delete`, and `id-agents spawn <name>`.
+
+### Fixed — five ways a team could silently lose data on a round trip
+
+Export wrote fields that import could not read back. Each was invisible until a restore was attempted.
+
+- A DMZ agent re-imported as **mesh-reachable**: the delivery gate reads `mesh_member !== false`, so an absent key fails open. The six posture keys now survive.
+- ENS `token_id`/`domain` and `agent_account` were write-only.
+- The team `org` block was never persisted, so no export ever emitted one.
+- `customer_domain` and `public_endpoint_url` were write-only, so a restored `public-agent-remote` agent came back unreachable.
+- `agents.list()` hides `interactive`/`virtual` rows, so export silently dropped them. Export now reads every row and **names** any it cannot represent; exported plus reported always equals the rows handed in.
+
+A single guard now round-trips every `config`-classified metadata key **and** column, with one documented exception.
+
+### Fixed — a config file could root an agent process anywhere on disk
+
+`/import` and `/deploy` took an absolute `workingDirectory` verbatim and created it. Both now resolve it against permitted roots and reject an escape with a 400 naming the path. A startup audit reports any existing agent outside the roots at boot rather than at deploy time.
+
+### Fixed — Postgres `updateIdentity` destroyed data on a partial update
+
+The Postgres repository wrote all five identity columns unconditionally, so a caller passing only `{name}` nulled `token_id`, `domain`, `endpoint` and the entire metadata JSON. sqlite was already correct; the backends had diverged.
+
+### Fixed
+
+- A generated `workingDirectory` is exported as a comment rather than a value, so a restored agent gets a fresh directory instead of one belonging to a live agent. Authored paths still round-trip untouched.
+- `/agents spawn` and `/agents remove` were advertised in help, the 409 message and the docs, but no such subcommands exist — `/agents <anything>` silently listed instead. The messages now name real commands.
+- `POST /agents/spawn` reaches parity with deploy: it provisions a wallet on `wallet: true` and passes real org context.
+
+
 ## 0.1.109-beta
 
 ### Fixed — "Agent not found" now names the team it searched
