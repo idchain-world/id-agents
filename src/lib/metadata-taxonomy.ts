@@ -115,32 +115,43 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //     Written by the `/identity --name` rename path
   //     (agent-manager-db.ts:6908) as `alias = alias || <previous name>`, so it
   //     preserves an agent's ORIGINAL name across a rename.
-  //     Blast radius, re-counted 2026-07-26 — supersedes an earlier "21 sites
-  //     across 6-7 files" and a "55 across 10", both of which miscounted:
-  //     35 reads across 9 files, in two layers.
-  //       21 reads of the stored key, across 5 files:
-  //         agent-manager-db.ts 11 (:569, :893, :2621, :4073, :4267, :4370,
-  //         :4419, :4560, :4806, :5701, and :7952 as `meta.alias`),
-  //         db/repos/sqlite/agents-repo.ts 6 (SQL
-  //         `json_extract(metadata,'$.alias')` at :45, :87, :102, :131, :166,
-  //         :183), sync.ts 2 (:206, :234), checkin-service.ts 1 (:373),
-  //         scheduler-service.ts 1 (:100).
-  //       14 reads of the flattened `.alias` field that agent-manager-db.ts:893
-  //         serializes into every API agent object, across 4 files:
+  //     Blast radius: 43 reads across 12 files. Counted BY FORM 2026-07-26 —
+  //     supersedes "21 across 6-7", "55 across 10" and "35 across 9". Every
+  //     one of those came from a bare `\.alias` regex over `*.ts`, which is
+  //     wrong in both directions at once: it sweeps in `parsed.alias` (the
+  //     output of parseAgentRef — a lookup INPUT, not this key) while missing
+  //     the SQL-form reads, which have no dot, and the .tsx TUI reads.
+  //       28 reads of the stored key, across 6 files:
+  //         JS form `(metadata as any)?.alias` / `meta.alias` — 15 across 4:
+  //           agent-manager-db.ts 11 (:569, :893, :2621, :4073, :4267, :4370,
+  //           :4419, :4560, :4806, :5701, :7952), sync.ts 2 (:206, :234),
+  //           checkins/checkin-service.ts 1 (:373),
+  //           scheduling/scheduler-service.ts 1 (:100).
+  //         SQL form, invisible to any `.alias` regex — 13 across 2:
+  //           db/repos/postgres/agents-repo.ts 7 `metadata->>'alias'` (:26,
+  //           :61, :73, :81, :105, :141, :150) and
+  //           db/repos/sqlite/agents-repo.ts 6
+  //           `json_extract(metadata,'$.alias')` (:45, :87, :102, :131, :166,
+  //           :183). Both repos are DIRECT readers; their JS-form `.alias`
+  //           hits are 100% `parsed.alias` homonyms.
+  //       15 reads of the flattened `.alias` field that agent-manager-db.ts:893
+  //         serializes into every API agent object, across 6 files:
   //         interactive-agent-cli.ts 6, claude-agent-server.ts 3,
-  //         core/agent-identifier.ts 3, start-agent-manager.ts 2 — so an
-  //         export bug here reaches the CLI too.
-  //     Deliberately EXCLUDED from the count: the 18 `parsed.alias` reads in
-  //     the two agents-repo files, which are the parsed agent-*reference*, not
-  //     this key; and the same-named homonyms normalizeAlias /
-  //     resolveModelAlias / agentAlias / walletAlias / isValidAlias.
+  //         start-agent-manager.ts 2, tui/components/AgentDetail.tsx 2 (:49,
+  //         :88), tui/components/AgentRow.tsx 1 (:76), and
+  //         core/agent-identifier.ts 1 (:157 `m.alias` on AgentMatch only —
+  //         :75/:89 are `id.alias` on AgentIdentifier, which is
+  //         normalizeAlias(name), a homonym) — so an export bug here reaches
+  //         the CLI and the TUI too.
+  //     Other homonyms excluded: normalizeAlias / resolveModelAlias /
+  //     agentAlias / walletAlias / isValidAlias.
   //     §3 could not have seen it: no live row has been renamed, which is also
   //     why token_id and domain are 0 (§3.2). It is not config-derived either,
   //     so re-deriving §3 from config-parser.ts would not surface it.
   //     Dropping it on export is NOT cosmetic: a renamed agent round-trips
-  //     under its new name, all 35 readers switch display names at once, and
-  //     sync.ts:206 — which indexes running rows BY alias — stops matching the
-  //     config entry and can treat the agent as new.
+  //     under its new name, all 43 readers switch display names at once, and
+  //     sync.ts — which builds runningByAlias at :206 and falls back to it at
+  //     :216 — stops matching the config entry and can treat the agent as new.
   //     Classifying it needs an export-rule decision, not just a class: if
   //     `alias` is the name the config should carry, then the exported agent
   //     name is `alias`, not the `name` column. That is a §3.1 call. PENDING.
