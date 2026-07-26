@@ -25,7 +25,13 @@ import { defaultDeliverFn, redactSshTarget, type DeliverFn } from './lib/ssh-del
 import { probeRemoteAgent, defaultHealthProbeFn, type HealthProbeFn } from './lib/remote-heartbeat.js';
 import { filterClaudeEnvVars } from './lib/env-hygiene.js';
 import { SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
-import { resolveWithinRoots, spawnWorkdirRoots } from './lib/path-policy.js';
+import {
+  agentWorkdirRoots,
+  auditWorkdirs,
+  formatWorkdirAudit,
+  PROJECTS_ROOT_ENV,
+  resolveWithinRoots,
+} from './lib/path-policy.js';
 import { type Db } from './db/db-service.js';
 import type { AgentRow, ScheduleDefinitionRow, TaskRow } from './db/types.js';
 import fetch from 'node-fetch';
@@ -3031,7 +3037,7 @@ export class AgentManagerDb {
         // because we built it ourselves.
         let requestedWorkDir: string | undefined;
         if (configWorkDir !== undefined && configWorkDir !== null && configWorkDir !== '') {
-          const verdict = resolveWithinRoots(configWorkDir, spawnWorkdirRoots(this.baseWorkDir));
+          const verdict = resolveWithinRoots(configWorkDir, agentWorkdirRoots(this.baseWorkDir));
           if (!verdict.ok) {
             console.warn(`[Spawn] rejected workingDirectory: ${verdict.reason}`);
             return res.status(400).json({ error: 'invalid_working_directory' });
@@ -6058,6 +6064,42 @@ export class AgentManagerDb {
           return { ok: false, error: 'No agents defined in config' };
         }
 
+        // #4d78adbc — a config file is an EXECUTION SURFACE once /import exists.
+        // This path took `workingDirectory` verbatim when absolute, mkdir'd it,
+        // wrote CLAUDE.md, copied skills and plugins into it and rooted an agent
+        // process there. That is the commit-5 spawn finding reopened through a
+        // file-borne vector, so it goes through the SAME guard as :3032 rather
+        // than a second policy that could drift.
+        //
+        // PRE-FLIGHT, not per-agent: every path is checked before ANY agent is
+        // created, so a rejected config leaves nothing behind — no rows, no
+        // directories, no last_config_path. Validating inside the loop would
+        // half-deploy a team and then refuse.
+        const workdirRoots = agentWorkdirRoots(this.baseWorkDir);
+        const resolvedWorkdirs = new Map<string, string>();
+        for (const agentConfig of agents) {
+          const declared = agentConfig.workingDirectory;
+          if (declared === undefined || declared === null || declared === '') continue;
+          const verdict = resolveWithinRoots(declared, workdirRoots);
+          if (!verdict.ok) {
+            console.warn(`[Deploy] rejected workingDirectory for "${agentConfig.name}": ${verdict.reason}`);
+            return {
+              ok: false,
+              httpStatus: 400,
+              error: 'invalid_working_directory',
+              // Name the path AND what is allowed: someone importing a file
+              // they did not write needs to know why it failed and how to fix it.
+              message:
+                `Agent "${agentConfig.name}" declares a workingDirectory outside every permitted root: ` +
+                `${declared}. Permitted roots: ${workdirRoots.join(', ')}. Set ${PROJECTS_ROOT_ENV} or ` +
+                `add the directory to ID_ALLOWED_WORKDIR_ROOTS (colon-separated) to permit it.`,
+            };
+          }
+          // Store the RESOLVED path, as spawn does, so a symlink cannot be
+          // re-followed elsewhere after the check.
+          resolvedWorkdirs.set(agentConfig.name, verdict.path);
+        }
+
         // Remember the config file for this team so runtime profile edits
         // (POST /agents/by-name/:name/profile) can persist back to YAML.
         // Persist the parsed org block alongside the config path. The database
@@ -6123,9 +6165,11 @@ export class AgentManagerDb {
           const agentId = `agent_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
           try {
             const port = await this.dbNextPort(effectiveTeamId);
-            const workingDirectory = agentConfig.workingDirectory && path.isAbsolute(agentConfig.workingDirectory)
-              ? agentConfig.workingDirectory
-              : `${this.baseWorkDir}/agents/${agentId}`;
+            // Resolved by the pre-flight guard above (#4d78adbc); an agent that
+            // declared nothing keeps the generated default, which we built and
+            // therefore do not need to validate.
+            const workingDirectory = resolvedWorkdirs.get(agentConfig.name)
+              || `${this.baseWorkDir}/agents/${agentId}`;
 
             if (!existsSync(workingDirectory)) {
               mkdirSync(workingDirectory, { recursive: true });
@@ -7496,6 +7540,9 @@ export class AgentManagerDb {
         // Seed well-known teams (idempotent — getOrCreateTeamId is safe to call repeatedly)
         await this.seedWellKnownTeams();
 
+        // #4d78adbc part 3 — surface a containment misconfiguration at BOOT.
+        await this.auditAgentWorkdirs();
+
         // Start periodic health monitoring (every 30s)
         this.startHealthMonitor();
 
@@ -7608,6 +7655,42 @@ export class AgentManagerDb {
    * manager start. User-specific project teams are NOT seeded here — deploy
    * them with `/deploy <config>` instead.
    */
+  /**
+   * Boot-time containment audit (#4d78adbc part 3).
+   *
+   * The guard added to spawn and deploy is only as correct as its configuration:
+   * `agentWorkdirRoots` reads three env vars and a directory that may not exist,
+   * so on a host where none are set the permitted set silently narrows. Without
+   * this, the first symptom is a 400 on a deploy someone needed to run — the
+   * worst possible moment to discover a setting.
+   *
+   * REPORTS, NEVER REFUSES. These agents predate the rule and are running now;
+   * refusing to boot would break a live fleet to enforce a policy about paths
+   * that are already on disk. It is also wrapped so an audit failure can never
+   * be the reason the manager did not start.
+   *
+   * Returns the findings so a test can assert on them without scraping stdout.
+   */
+  async auditAgentWorkdirs(): Promise<Array<{ agent: string; team: string; path: string }>> {
+    try {
+      const roots = agentWorkdirRoots(this.baseWorkDir);
+      const rows: Array<{ name: string; working_directory?: unknown; teamName?: string }> = [];
+      for (const team of await this.db.teams.listTeams()) {
+        // listAll: a register-created agent has a working directory too.
+        for (const agent of await this.db.agents.listAll(team.id)) {
+          rows.push({ name: agent.name, working_directory: agent.working_directory, teamName: team.name });
+        }
+      }
+
+      const findings = auditWorkdirs(rows, roots);
+      for (const line of formatWorkdirAudit(findings, roots)) console.warn(line);
+      return findings;
+    } catch (err) {
+      console.warn(`[WorkdirAudit] skipped: ${(err as Error)?.message || String(err)}`);
+      return [];
+    }
+  }
+
   private async seedWellKnownTeams(): Promise<void> {
     try {
       const seeded: string[] = [];

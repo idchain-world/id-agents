@@ -24,6 +24,7 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 export type PathPolicyResult =
@@ -87,21 +88,131 @@ export function resolveWithinRoots(candidate: unknown, roots: string[]): PathPol
   return { ok: false, reason: `resolves outside every permitted root: ${resolved}` };
 }
 
+/** Env var an operator sets to permit a projects directory outside the default. */
+export const PROJECTS_ROOT_ENV = 'ID_PROJECTS_ROOT';
+
 /**
- * The roots a spawned agent's working directory may live under.
+ * The conventional projects root, included ONLY when it actually exists.
  *
- * `baseWorkDir` and `ID_WORKSPACE_DIR` are where the manager puts agents by
- * default. `ID_ALLOWED_WORKDIR_ROOTS` (colon-separated) exists because
- * spawning an agent onto an existing project checkout is a legitimate,
- * pre-existing use — this keeps that possible without weakening the default to
- * "anywhere on disk". An operator opting a directory in is a deliberate act;
- * a request body should not be.
+ * `ID_PROJECTS_ROOT` wins if set. Otherwise `<homedir>/projects` is used when
+ * that directory is present — the near-universal convention for "where my
+ * checkouts live", and the reason this is a rule rather than a list: it is
+ * derived from `os.homedir()` at call time, so it means something different and
+ * correct on every machine. NO DEVELOPER PATH IS EVER HARDCODED.
+ *
+ * Existence is the gate. On a fresh install with no `~/projects`, this
+ * contributes nothing and the permitted set is `baseWorkDir` alone — the
+ * conservative default. It cannot silently widen containment on a host where
+ * the convention is not in use.
  */
-export function spawnWorkdirRoots(baseWorkDir: string): string[] {
+export function projectsRoot(env: NodeJS.ProcessEnv = process.env, home?: string): string | null {
+  const configured = env[PROJECTS_ROOT_ENV];
+  if (configured && configured.trim()) return configured.trim();
+
+  const candidate = path.join(home ?? os.homedir(), 'projects');
+  try {
+    return fs.statSync(candidate).isDirectory() ? candidate : null;
+  } catch {
+    return null; // absent — contribute nothing
+  }
+}
+
+/**
+ * The roots an agent's working directory may live under.
+ *
+ * ONE POLICY, EVERY CALLER. Used by `POST /agents/spawn` and by the
+ * deploy/import create path, deliberately: two root sets would drift, and the
+ * second one to drift would be the one nobody was testing.
+ *
+ * Sources, in order:
+ *   1. `baseWorkDir` — where the manager puts agents itself.
+ *   2. `ID_WORKSPACE_DIR`.
+ *   3. `ID_ALLOWED_WORKDIR_ROOTS`, colon-separated. Spawning an agent onto an
+ *      existing checkout is a legitimate, pre-existing use; an operator opting
+ *      a directory in is a deliberate act, a request body is not.
+ *   4. The projects root above, when it exists.
+ *
+ * WHY 4 EXISTS. Containment without it is not a safe default, it is an outage:
+ * measured against the live fleet, 34 of 38 distinct working directories fall
+ * outside sources 1-3, so every real deploy and import would 400. A guard that
+ * has to be switched off to get work done teaches people to switch it off.
+ */
+export function agentWorkdirRoots(baseWorkDir: string, home?: string): string[] {
   const roots = [baseWorkDir];
   if (process.env.ID_WORKSPACE_DIR) roots.push(process.env.ID_WORKSPACE_DIR);
   for (const extra of (process.env.ID_ALLOWED_WORKDIR_ROOTS || '').split(':')) {
     if (extra.trim()) roots.push(extra.trim());
   }
+  // `home` is injectable ONLY so the fresh-install case (no ~/projects) is
+  // testable without depending on whether the host running the suite has one.
+  const projects = projectsRoot(process.env, home);
+  if (projects) roots.push(projects);
   return roots;
+}
+
+/**
+ * The old name, kept as an alias so no caller silently keeps a stale policy.
+ * @deprecated use {@link agentWorkdirRoots} — the roots are no longer spawn-only.
+ */
+export const spawnWorkdirRoots = agentWorkdirRoots;
+
+export interface WorkdirAuditRow {
+  name: string;
+  working_directory?: unknown;
+  teamName?: string;
+}
+
+export interface WorkdirAuditEntry {
+  agent: string;
+  team: string;
+  path: string;
+}
+
+/**
+ * Which live agents sit OUTSIDE the permitted roots?
+ *
+ * THE POINT OF THIS FUNCTION IS THAT THE GUARD'S CORRECTNESS DEPENDS ON
+ * CONFIGURATION. `agentWorkdirRoots` reads three env vars and a directory that
+ * may not exist, so on a host where none are set the permitted set silently
+ * narrows — and nobody finds out until a deploy 400s, which is the worst moment
+ * to learn it. Running this at boot turns a latent misconfiguration into a
+ * message, at the one time an operator can act on it before it costs anything.
+ *
+ * Reports only. Refusing to boot over a pre-existing path would break a running
+ * fleet to enforce a rule those agents predate.
+ *
+ * An agent with no `working_directory` is not a finding: nothing was chosen, so
+ * there is nothing to be outside the roots.
+ */
+export function auditWorkdirs(rows: WorkdirAuditRow[], roots: string[]): WorkdirAuditEntry[] {
+  const findings: WorkdirAuditEntry[] = [];
+  for (const row of rows) {
+    const workdir = row.working_directory;
+    if (typeof workdir !== 'string' || !workdir.trim()) continue;
+    // Same containment call the guard uses, so the audit cannot disagree with it.
+    if (resolveWithinRoots(workdir, roots).ok) continue;
+    findings.push({ agent: row.name, team: row.teamName ?? 'unknown', path: workdir });
+  }
+  return findings;
+}
+
+/**
+ * The boot report. Names every offending agent AND the env var to set, because
+ * a warning that does not say what to do about it gets read once and ignored.
+ */
+export function formatWorkdirAudit(findings: WorkdirAuditEntry[], roots: string[]): string[] {
+  if (findings.length === 0) return [];
+  const lines = [
+    `[WorkdirAudit] ${findings.length} agent(s) have a working directory outside the permitted roots.`,
+    `[WorkdirAudit] Permitted: ${roots.join(', ')}`,
+  ];
+  for (const f of findings) {
+    lines.push(`[WorkdirAudit]   ${f.team}/${f.agent}: ${f.path}`);
+  }
+  lines.push(
+    `[WorkdirAudit] These agents keep running. New deploys, imports and spawns targeting those ` +
+    `paths will be REJECTED until the root is permitted — set ${PROJECTS_ROOT_ENV} or add them to ` +
+    `ID_ALLOWED_WORKDIR_ROOTS (colon-separated).`,
+  );
+  return lines;
 }

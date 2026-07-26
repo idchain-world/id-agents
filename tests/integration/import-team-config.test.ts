@@ -31,6 +31,7 @@ import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 import { importAvatars } from '../../src/lib/import-avatars.js';
 import { MAX_AVATAR_BYTES } from '../../src/lib/export-team-config.js';
+import { permitTmpWorkdirs } from '../helpers/permit-tmp-workdirs.js';
 
 async function createInMemoryDb() {
   const adapter = new SqliteAdapter(':memory:');
@@ -65,6 +66,10 @@ const SOURCE_TEAM = 'import-src';
 const NEW_TEAM = 'import-dst';
 
 describe('/import (§7)', () => {
+  // #4d78adbc: fixtures live under os.tmpdir(), which containment rejects.
+  // Declare it the same way an operator would, so this suite keeps testing
+  // what it is about rather than the working-directory guard.
+  permitTmpWorkdirs();
   let db: Awaited<ReturnType<typeof createInMemoryDb>>;
   let manager: AgentManagerDb;
   let baseUrl: string;

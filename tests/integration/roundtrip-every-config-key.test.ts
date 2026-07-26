@@ -45,6 +45,7 @@ import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 import { classifyMetadataKey, listClassifiedMetadataKeys } from '../../src/lib/metadata-taxonomy.js';
 import { isGeneratedWorkdir } from '../../src/lib/export-team-config.js';
+import { permitTmpWorkdirs } from '../helpers/permit-tmp-workdirs.js';
 
 async function createInMemoryDb() {
   const adapter = new SqliteAdapter(':memory:');
@@ -124,6 +125,10 @@ const TEAM = 'rt-src';
 const NEW_TEAM = 'rt-dst';
 
 describe('every config-classified key survives export -> import', () => {
+  // #4d78adbc: fixtures live under os.tmpdir(), which containment rejects.
+  // Declare it the same way an operator would, so this suite keeps testing
+  // what it is about rather than the working-directory guard.
+  permitTmpWorkdirs();
   let db: Awaited<ReturnType<typeof createInMemoryDb>>;
   let manager: AgentManagerDb;
   let baseUrl: string;
@@ -291,6 +296,8 @@ describe('every config-classified key survives export -> import', () => {
 });
 
 describe('/import without --team (§7 primary form)', () => {
+  // #4d78adbc: same opt-in as the suite above — this block has its own fixtures.
+  permitTmpWorkdirs();
   let db: Awaited<ReturnType<typeof createInMemoryDb>>;
   let manager: AgentManagerDb;
   let baseUrl: string;

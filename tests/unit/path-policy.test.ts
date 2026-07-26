@@ -13,7 +13,11 @@ import os from 'os';
 import path from 'path';
 
 import {
+  agentWorkdirRoots,
+  auditWorkdirs,
+  formatWorkdirAudit,
   isWithinRoot,
+  projectsRoot,
   realpathNearest,
   resolveWithinRoots,
   spawnWorkdirRoots,
@@ -123,22 +127,140 @@ describe('realpathNearest', () => {
   });
 });
 
-describe('spawnWorkdirRoots', () => {
-  const saved = { ws: process.env.ID_WORKSPACE_DIR, extra: process.env.ID_ALLOWED_WORKDIR_ROOTS };
+describe('agentWorkdirRoots', () => {
+  const saved = {
+    ws: process.env.ID_WORKSPACE_DIR,
+    extra: process.env.ID_ALLOWED_WORKDIR_ROOTS,
+    projects: process.env.ID_PROJECTS_ROOT,
+  };
+  beforeEach(() => {
+    delete process.env.ID_WORKSPACE_DIR;
+    delete process.env.ID_ALLOWED_WORKDIR_ROOTS;
+    // Pinned so the suite does not depend on whether the HOST has ~/projects.
+    process.env.ID_PROJECTS_ROOT = '/pinned-projects';
+  });
   afterEach(() => {
-    if (saved.ws === undefined) delete process.env.ID_WORKSPACE_DIR; else process.env.ID_WORKSPACE_DIR = saved.ws;
-    if (saved.extra === undefined) delete process.env.ID_ALLOWED_WORKDIR_ROOTS; else process.env.ID_ALLOWED_WORKDIR_ROOTS = saved.extra;
+    for (const [key, value] of [
+      ['ID_WORKSPACE_DIR', saved.ws],
+      ['ID_ALLOWED_WORKDIR_ROOTS', saved.extra],
+      ['ID_PROJECTS_ROOT', saved.projects],
+    ] as const) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
   });
 
   it('always includes baseWorkDir', () => {
-    delete process.env.ID_WORKSPACE_DIR;
-    delete process.env.ID_ALLOWED_WORKDIR_ROOTS;
-    expect(spawnWorkdirRoots('/work')).toEqual(['/work']);
+    expect(agentWorkdirRoots('/work')[0]).toBe('/work');
   });
 
   it('honours the operator opt-in roots', () => {
-    delete process.env.ID_WORKSPACE_DIR;
     process.env.ID_ALLOWED_WORKDIR_ROOTS = '/projects:/repos';
-    expect(spawnWorkdirRoots('/work')).toEqual(['/work', '/projects', '/repos']);
+    expect(agentWorkdirRoots('/work')).toEqual(['/work', '/projects', '/repos', '/pinned-projects']);
+  });
+
+  it('includes the configured projects root', () => {
+    expect(agentWorkdirRoots('/work')).toEqual(['/work', '/pinned-projects']);
+  });
+
+  it('is the SAME policy under the old spawn-only name', () => {
+    // The alias exists so no caller keeps a stale, narrower root set.
+    expect(spawnWorkdirRoots('/work')).toEqual(agentWorkdirRoots('/work'));
+  });
+});
+
+describe('projectsRoot — a rule, never a hardcoded developer path', () => {
+  const saved = process.env.ID_PROJECTS_ROOT;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ID_PROJECTS_ROOT; else process.env.ID_PROJECTS_ROOT = saved;
+  });
+
+  it('prefers the env var when set', () => {
+    process.env.ID_PROJECTS_ROOT = '/explicit';
+    expect(projectsRoot()).toBe('/explicit');
+  });
+
+  it('derives <home>/projects when it exists', () => {
+    delete process.env.ID_PROJECTS_ROOT;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+    fs.mkdirSync(path.join(home, 'projects'));
+    expect(projectsRoot(process.env, home)).toBe(path.join(home, 'projects'));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  /**
+   * The fresh-install case. No ~/projects means the convention is not in use
+   * here, so it contributes NOTHING rather than widening containment to a
+   * directory that does not exist.
+   */
+  it('contributes nothing when <home>/projects is absent — the fresh-install case', () => {
+    delete process.env.ID_PROJECTS_ROOT;
+    delete process.env.ID_WORKSPACE_DIR;
+    delete process.env.ID_ALLOWED_WORKDIR_ROOTS;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+    expect(projectsRoot(process.env, home)).toBeNull();
+    // Roots collapse to baseWorkDir alone: conservative, never wider.
+    expect(agentWorkdirRoots('/work', home)).toEqual(['/work']);
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('ignores a <home>/projects that is a FILE, not a directory', () => {
+    delete process.env.ID_PROJECTS_ROOT;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
+    fs.writeFileSync(path.join(home, 'projects'), 'not a dir');
+    expect(projectsRoot(process.env, home)).toBeNull();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('hardcodes no developer path anywhere in the module', () => {
+    // The rule must generalise: /Users/<someone> in the source would mean it
+    // only works on one machine.
+    const source = fs.readFileSync(new URL('../../src/lib/path-policy.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(/\/Users\/[a-z0-9]+\//i);
+    expect(source).not.toMatch(/\/home\/[a-z0-9]+\//i);
+  });
+});
+
+describe('auditWorkdirs — the boot report', () => {
+  const roots = ['/work', '/allowed'];
+
+  it('names agents outside every root, with team and path', () => {
+    const findings = auditWorkdirs(
+      [
+        { name: 'inside', working_directory: '/work/agents/a', teamName: 't1' },
+        { name: 'outside', working_directory: '/somewhere/else', teamName: 't2' },
+      ],
+      roots,
+    );
+    expect(findings).toEqual([{ agent: 'outside', team: 't2', path: '/somewhere/else' }]);
+  });
+
+  it('does not flag an agent that chose nothing', () => {
+    expect(auditWorkdirs([{ name: 'a', teamName: 't' }], roots)).toEqual([]);
+    expect(auditWorkdirs([{ name: 'a', working_directory: '', teamName: 't' }], roots)).toEqual([]);
+  });
+
+  it('reports nothing on a fresh install with no agents', () => {
+    expect(auditWorkdirs([], roots)).toEqual([]);
+    expect(formatWorkdirAudit([], roots)).toEqual([]);
+  });
+
+  it('tells the operator which env var to set', () => {
+    const lines = formatWorkdirAudit(
+      [{ agent: 'a', team: 't', path: '/elsewhere' }], roots,
+    ).join('\n');
+    expect(lines).toContain('/elsewhere');
+    expect(lines).toContain('t/a');
+    expect(lines).toContain('ID_PROJECTS_ROOT');
+    expect(lines).toContain('ID_ALLOWED_WORKDIR_ROOTS');
+    // And that it is a report, not a refusal.
+    expect(lines).toContain('keep running');
+  });
+
+  it('agrees with the guard by construction', () => {
+    // The audit calls resolveWithinRoots, so a path the guard would accept can
+    // never be reported — the two cannot drift into disagreement.
+    const accepted = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agree-')));
+    expect(auditWorkdirs([{ name: 'a', working_directory: accepted }], [accepted])).toEqual([]);
+    fs.rmSync(accepted, { recursive: true, force: true });
   });
 });
