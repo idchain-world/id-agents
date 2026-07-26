@@ -162,10 +162,11 @@ describe('classifyMetadataKey — §3', () => {
    * unknown, and classifying any of them is meant to fail this test.
    */
   it('pins "alias" as unknown — the stashed display name (agent-manager-db.ts:6908)', () => {
-    // The rename path moves the OLD name here. Re-counted 2026-07-26: 24 direct
-    // `metadata.alias` reads across 5 files plus 31 reads of the flattened
-    // `.alias` API field across 7 files — 55 across 10 files, excluding the
-    // same-named homonyms (normalizeAlias, resolveModelAlias, agentAlias).
+    // The rename path moves the OLD name here. Re-counted 2026-07-26: 21 reads
+    // of the stored key across 5 files plus 14 reads of the flattened `.alias`
+    // API field across 4 files — 35 across 9 files, excluding `parsed.alias`
+    // (a parsed agent reference, not this key) and the same-named homonyms
+    // (normalizeAlias, resolveModelAlias, agentAlias).
     // Dropping it on export makes a renamed agent silently display its new row
     // name instead — see the fuller note in the module, which covers sync.ts:206.
     expect(classifyMetadataKey('alias')).toBe('unknown');

@@ -115,22 +115,30 @@ const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze
   //     Written by the `/identity --name` rename path
   //     (agent-manager-db.ts:6908) as `alias = alias || <previous name>`, so it
   //     preserves an agent's ORIGINAL name across a rename.
-  //     Blast radius, re-counted 2026-07-26 (supersedes an earlier "21 sites
-  //     across 6-7 files", and also a "58 across 10" that wrongly swept in the
-  //     same-named homonyms normalizeAlias / resolveModelAlias / agentAlias /
-  //     walletAlias / isValidAlias): 24 direct reads of `metadata.alias` across
-  //     5 files (agent-manager-db.ts, sync.ts, checkin-service.ts,
-  //     scheduler-service.ts, db/repos/sqlite/agents-repo.ts) PLUS 31 reads of
-  //     the flattened `.alias` field the API serves back, across 7 files
-  //     (agent-manager-db.ts, interactive-agent-cli.ts, claude-agent-server.ts,
-  //     core/agent-identifier.ts, start-agent-manager.ts, and both agents-repo
-  //     implementations) — 55 reads across 10 files, so an export bug here
-  //     reaches the CLI too.
+  //     Blast radius, re-counted 2026-07-26 — supersedes an earlier "21 sites
+  //     across 6-7 files" and a "55 across 10", both of which miscounted:
+  //     35 reads across 9 files, in two layers.
+  //       21 reads of the stored key, across 5 files:
+  //         agent-manager-db.ts 11 (:569, :893, :2621, :4073, :4267, :4370,
+  //         :4419, :4560, :4806, :5701, and :7952 as `meta.alias`),
+  //         db/repos/sqlite/agents-repo.ts 6 (SQL
+  //         `json_extract(metadata,'$.alias')` at :45, :87, :102, :131, :166,
+  //         :183), sync.ts 2 (:206, :234), checkin-service.ts 1 (:373),
+  //         scheduler-service.ts 1 (:100).
+  //       14 reads of the flattened `.alias` field that agent-manager-db.ts:893
+  //         serializes into every API agent object, across 4 files:
+  //         interactive-agent-cli.ts 6, claude-agent-server.ts 3,
+  //         core/agent-identifier.ts 3, start-agent-manager.ts 2 — so an
+  //         export bug here reaches the CLI too.
+  //     Deliberately EXCLUDED from the count: the 18 `parsed.alias` reads in
+  //     the two agents-repo files, which are the parsed agent-*reference*, not
+  //     this key; and the same-named homonyms normalizeAlias /
+  //     resolveModelAlias / agentAlias / walletAlias / isValidAlias.
   //     §3 could not have seen it: no live row has been renamed, which is also
   //     why token_id and domain are 0 (§3.2). It is not config-derived either,
   //     so re-deriving §3 from config-parser.ts would not surface it.
   //     Dropping it on export is NOT cosmetic: a renamed agent round-trips
-  //     under its new name, all 21 readers switch display names at once, and
+  //     under its new name, all 35 readers switch display names at once, and
   //     sync.ts:206 — which indexes running rows BY alias — stops matching the
   //     config entry and can treat the agent as new.
   //     Classifying it needs an export-rule decision, not just a class: if
