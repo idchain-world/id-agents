@@ -6246,6 +6246,71 @@ export class AgentManagerDb {
         };
       }
 
+      // §8 (D6) — /diff <team> <config>. READ-ONLY drift inspection.
+      //
+      // This is what survives the removal of /sync: reconciliation still needs
+      // somewhere to SEE drift, it just no longer gets to act on it. The
+      // handler therefore does exactly three things — read rows, parse a
+      // config, compute — and calls nothing that writes. computeSyncPlan is
+      // reused unchanged; sync.ts is deliberately not refactored here because
+      // only its mutating CALLERS die in commit 9.
+      //
+      // Notably absent, and absent on purpose: the updateConfig that /sync
+      // performs before planning. /diff records nothing about having been run.
+      case 'diff': {
+        const diffTeamName = args[0];
+        const diffConfigArg = args[1];
+        if (!diffTeamName || !diffConfigArg) {
+          return { ok: false, error: 'Usage: /diff <team> <config>' };
+        }
+
+        const diffTeam = await this.db.teams.getTeamByName(diffTeamName);
+        if (!diffTeam) {
+          return { ok: false, error: `Team "${diffTeamName}" not found` };
+        }
+
+        const diffLookup = this.resolveConfigPath(
+          diffConfigArg.endsWith('.yaml') || diffConfigArg.endsWith('.yml')
+            ? diffConfigArg
+            : `${diffConfigArg}.yaml`,
+        );
+        if (!diffLookup.resolved) {
+          return { ok: false, error: `Config not found: ${diffConfigArg}` };
+        }
+
+        const { agents: diffConfigAgents, errors: diffErrors } = processConfig(
+          diffLookup.resolved,
+          this.baseWorkDir,
+          args.slice(2),
+        );
+        if (diffErrors.length > 0) {
+          return {
+            ok: false,
+            error: `Config errors: ${diffErrors.map(e => `${e.path}: ${e.message}`).join('; ')}`,
+          };
+        }
+
+        // Same row selection /sync used, so the two agree about what drift is.
+        const diffRunning = (await this.db.agents.list(diffTeam.id, true))
+          .filter(a => a.type === 'claude' || a.type === 'automator');
+
+        const diffPlan = computeSyncPlan(diffConfigAgents, diffRunning, this.defaultConfig?.model);
+
+        return {
+          ok: true,
+          result: {
+            team: diffTeamName,
+            config: diffLookup.resolved,
+            added: diffPlan.added,
+            removed: diffPlan.removed,
+            changed: diffPlan.changed,
+            unchanged: diffPlan.unchanged,
+            summary: formatSyncSummary(diffPlan),
+            verbose: formatSyncVerbose(diffPlan),
+          },
+        };
+      }
+
       // §7 — /import <file> [--team <name>]. Creates a NEW team by reusing the
       // deploy creation path verbatim, so the §4 refusal contract, org
       // persistence and workdir containment come along rather than being
