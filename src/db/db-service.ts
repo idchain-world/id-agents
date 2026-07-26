@@ -154,7 +154,12 @@ export interface AgentsRepository {
 
   /**
    * Update identity-related columns for an agent: name, token_id, domain,
-   * endpoint, and/or metadata (full replace).
+   * endpoint, and/or metadata.
+   *
+   * Partial update: an omitted (`undefined`) field leaves its column alone;
+   * only the fields present are written. A present `metadata` is a full
+   * replace of the JSON, not a merge. Callers rely on this — /meta setid
+   * passes `token_id: tokenIdArg || undefined` precisely to skip the column.
    */
   updateIdentity(
     agentId: string,

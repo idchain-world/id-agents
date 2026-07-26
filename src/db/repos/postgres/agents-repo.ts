@@ -316,16 +316,36 @@ export class PgAgentsRepo implements AgentsRepository {
       metadata?: Record<string, unknown>;
     },
   ): Promise<void> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+
+    if (fields.name !== undefined) {
+      params.push(fields.name);
+      sets.push(`name = $${params.length}`);
+    }
+    if (fields.token_id !== undefined) {
+      params.push(fields.token_id);
+      sets.push(`token_id = $${params.length}`);
+    }
+    if (fields.domain !== undefined) {
+      params.push(fields.domain);
+      sets.push(`domain = $${params.length}`);
+    }
+    if (fields.endpoint !== undefined) {
+      params.push(fields.endpoint);
+      sets.push(`endpoint = $${params.length}`);
+    }
+    if (fields.metadata !== undefined) {
+      params.push(fields.metadata);
+      sets.push(`metadata = $${params.length}`);
+    }
+
+    if (sets.length === 0) return;
+
+    params.push(agentId);
     await this.db.query(
-      `UPDATE agents SET name = $2, token_id = $3, domain = $4, endpoint = $5, metadata = $6 WHERE id = $1`,
-      [
-        agentId,
-        fields.name ?? null,
-        fields.token_id ?? null,
-        fields.domain ?? null,
-        fields.endpoint ?? null,
-        fields.metadata ?? null,
-      ],
+      `UPDATE agents SET ${sets.join(', ')} WHERE id = $${params.length}`,
+      params,
     );
   }
 
