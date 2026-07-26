@@ -32,7 +32,7 @@ MANAGER_PORT=5000 npm run id-agents
 
 Inside the CLI:
 - `/deploy <config>` — Deploy agents from a YAML config (clean/first-time)
-- `/diff <team> <config>` — report drift, read-only. `/sync` is [REMOVED](./sync-command.md); change live teams with `/agents spawn|remove` and `/model`
+- `/diff <team> <config>` — report drift, read-only. `/sync` is [REMOVED](./sync-command.md); change live teams with `/model <agent> <model>`, `/delete <agent>`, and `id-agents spawn <name>` to add one
 - `/deploy local-agent <name>` — Deploy a single local agent
 
 ### 3) Verify agents are running

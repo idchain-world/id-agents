@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
-import { SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
+import { SYNC_REMOVED_DESCRIPTION, SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
 import 'dotenv/config';
 import readline from 'readline';
 import fetch from 'node-fetch';
@@ -109,7 +109,7 @@ const HELP_ITEMS: Array<{ cmd: string; desc: string; indent?: boolean }> = [
   { cmd: '/task assign <task-name> <agent>', desc: 'Assign task to agent' },
   { cmd: '/task done <task-name>', desc: 'Mark task done' },
   { cmd: '/task remove <task-name>', desc: 'Remove a task' },
-  { cmd: '/sync', desc: 'REMOVED — use /diff for drift, /agents spawn|remove and /model for live changes' },
+  { cmd: '/sync', desc: SYNC_REMOVED_DESCRIPTION },
   { cmd: '/status', desc: 'Check agent status' },
   { cmd: '/update <agent> [--wallet <addr>] [--name <name>]', desc: 'Update agent properties' },
   { cmd: '/wallet <agent> [chain]', desc: 'Show agent wallet address (chain: eip155:1, solana, etc.)' },

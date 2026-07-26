@@ -308,7 +308,7 @@ Brief paragraph: what this agent owns, who it reports to, who reports to it.
 |---------|--------|-------------|
 | `/deploy <team>` | Nuke and recreate from YAML | First time, or after major restructuring |
 | `/diff <team> <config>` | Report drift between the database and a config. READ-ONLY — changes nothing | Any time you want to see divergence |
-| `/agents spawn`, `/agents remove`, `/model` | Change a live team | The database is the source of truth |
+| `id-agents spawn <name>`, `/delete <agent>`, `/model <agent> <model>` | Change a live team | The database is the source of truth |
 | `/export <team> [path]` / `/import <file> [--team <name>]` | Write a config from the database / create a NEW team from one | Backup, clone, migrate |
 | `/agents <team> rebuild` | Restart existing agents from DB. Does NOT re-overlay | Cycling agents without losing their per-agent skill customizations |
 | `/agents <team> stop` | Stop agents (keep DB rows) | Pausing work |

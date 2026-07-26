@@ -206,7 +206,7 @@ Or use the interactive CLI:
 ```bash
 MANAGER_URL=http://YOUR_SERVER_IP:4100 npm run id-agents
 # Then: /deploy local-agent dev
-# To change a live team later: /agents spawn|remove, /model  (/sync is REMOVED)
+# To change a live team later: /model, /delete, or `id-agents spawn <name>`  (/sync is REMOVED)
 ```
 
 ## Troubleshooting

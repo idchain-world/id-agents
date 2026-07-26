@@ -408,7 +408,7 @@ agents:
     model: composer-2
 ```
 
-Use `/deploy <config> --dry-run` to validate runtime/model/auth compatibility before any agents are created. `/deploy` is create-only, so to change a RUNNING team use `/agents spawn`, `/agents remove` and `/model`; `/diff <team> <config>` reports drift without changing anything.
+Use `/deploy <config> --dry-run` to validate runtime/model/auth compatibility before any agents are created. `/deploy` is create-only, so to change a RUNNING team use `/model <agent> <model>`, `/delete <agent>` and `id-agents spawn <name>`; `/diff <team> <config>` reports drift without changing anything.
 
 ---
 

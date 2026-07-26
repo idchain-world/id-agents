@@ -32,6 +32,7 @@ import { SqliteTasksRepo } from '../../src/db/repos/sqlite/tasks-repo.js';
 import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
 import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
+import { LIVE_TEAM_CHANGE_HINT } from '../../src/lib/sync-removed.js';
 import { permitTmpWorkdirs } from '../helpers/permit-tmp-workdirs.js';
 
 async function createInMemoryDb() {
@@ -164,8 +165,8 @@ agents:
     expect(status).toBe(409);
     expect(body.error).toBe('team_exists');
     expect(body.message).toBe(
-      `Team "${TEAM}" already exists. /deploy only creates new teams. To change a live team use ` +
-      `/agents spawn, /agents remove, or /model. To inspect drift, /diff <team> <config>.`,
+      `Team "${TEAM}" already exists. /deploy only creates new teams. ${LIVE_TEAM_CHANGE_HINT} ` +
+      `To inspect drift, /diff <team> <config>.`,
     );
   });
 

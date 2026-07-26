@@ -134,7 +134,8 @@ describe('/sync removal contract (§9, D2)', () => {
     expect(error).toContain('/export');
     expect(error).toContain('/import');
     expect(error).toContain('/diff');
-    expect(error).toContain('/agents spawn');
+    expect(error).toContain('/model');
+    expect(error).toContain('id-agents spawn');
     // And it says WHY, not just what to type instead.
     expect(error).toContain('source of truth');
   });

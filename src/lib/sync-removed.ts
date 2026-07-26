@@ -19,12 +19,40 @@
  * caught by a name-match sweep.
  */
 
-/** What to say when someone runs the removed command. */
+/**
+ * How to change a LIVE team, in the words of commands that actually exist.
+ *
+ * Verified against the code, because this is the sentence that got it wrong
+ * last time:
+ *   - `/model <agent> <model>`  agent-manager-db.ts, case 'model'
+ *   - `/delete <agent>`         agent-manager-db.ts, case 'delete'
+ *   - `id-agents spawn <name>`  id-agents-cli.ts, case 'spawn'
+ *   - `POST /agents/spawn`      the HTTP route, which also takes a library
+ *                               `agent` overlay the CLI cannot express
+ *
+ * Shared so the 409 refusal and the /sync removal notice cannot drift into
+ * saying different things — the drift is how the dead syntax spread to eleven
+ * surfaces in the first place.
+ */
+export const LIVE_TEAM_CHANGE_HINT =
+  'To change a live team use /model <agent> <model>, /delete <agent>, or ' +
+  '`id-agents spawn <name> [model]` (POST /agents/spawn over HTTP) to add one.';
+
+/**
+ * What to say when someone runs the removed command.
+ *
+ * EVERY COMMAND NAMED HERE MUST EXIST (#6bcd3201). The first version of this
+ * message pointed at `/agents spawn` and `/agents remove`, which have no
+ * handler — `/agents` dispatches only start|stop|rebuild|save|reset|probe. A
+ * removal notice that replaces one dead command with two more is worse than no
+ * notice at all, and an agent following it autonomously has no way to tell.
+ */
 export const SYNC_REMOVED_MESSAGE =
   '/sync has been removed. The database is the source of truth; config files are ' +
   'import/export artifacts. Use /diff <team> <config> to inspect drift without ' +
-  'changing anything, /agents spawn and /agents remove (or /model) to change a live ' +
-  'team, /export <team> [path] to write a config from the database, and ' +
+  'changing anything, /model <agent> <model> to change a model, /delete <agent> to ' +
+  'remove one, `id-agents spawn <name> [model]` or POST /agents/spawn to add one, ' +
+  '/export <team> [path] to write a config from the database, and ' +
   '/import <file> [--team <name>] to create a new team from one.';
 
 /**
@@ -33,4 +61,4 @@ export const SYNC_REMOVED_MESSAGE =
  * now actively lies, which is worse than saying nothing.
  */
 export const SYNC_REMOVED_DESCRIPTION =
-  'REMOVED — use `/diff` for drift, `/agents spawn|remove` and `/model` for live changes';
+  'REMOVED — use `/diff` for drift, `/model` and `/delete` for live changes';

@@ -14,12 +14,33 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { SYNC_REMOVED_DESCRIPTION, SYNC_REMOVED_MESSAGE } from '../../src/lib/sync-removed.js';
+import fs from 'fs';
+
+import {
+  LIVE_TEAM_CHANGE_HINT,
+  SYNC_REMOVED_DESCRIPTION,
+  SYNC_REMOVED_MESSAGE,
+} from '../../src/lib/sync-removed.js';
 import { COMMAND_POLICIES } from '../../src/dashboard-core/commands/catalog.js';
+
+/**
+ * The `/agents` subcommands that actually dispatch, read from the source rather
+ * than transcribed — a hand-copied list is how the wrong one spread.
+ * `interactive-agent-cli.ts` holds the only allow-list:
+ *   if (!['start','stop','rebuild','save','reset','probe'].includes(action))
+ */
+function realAgentsSubcommands(): string[] {
+  const source = fs.readFileSync(
+    new URL('../../src/interactive-agent-cli.ts', import.meta.url), 'utf8',
+  );
+  const match = source.match(/\[((?:\s*'(?:start|stop|rebuild|save|reset|probe)',?)+)\]\s*\.includes\(action\)/);
+  if (!match) throw new Error('could not locate the /agents subcommand allow-list');
+  return [...match[1].matchAll(/'([a-z]+)'/g)].map((m) => m[1]);
+}
 
 describe('the removal notice names every replacement', () => {
   it('points at each surviving command', () => {
-    for (const replacement of ['/diff', '/agents spawn', '/agents remove', '/model', '/export', '/import']) {
+    for (const replacement of ['/diff', '/model', '/delete', 'id-agents spawn', '/export', '/import']) {
       expect(SYNC_REMOVED_MESSAGE).toContain(replacement);
     }
   });
@@ -27,6 +48,43 @@ describe('the removal notice names every replacement', () => {
   it('says WHY, not just what to type instead', () => {
     expect(SYNC_REMOVED_MESSAGE).toContain('source of truth');
     expect(SYNC_REMOVED_MESSAGE).toContain('has been removed');
+  });
+
+  /**
+   * THE GUARD FOR #6bcd3201. The first version of this notice replaced one dead
+   * command with two more: it pointed at `/agents spawn` and `/agents remove`,
+   * neither of which has a handler, and that syntax then spread to eleven
+   * surfaces including the admin skill an agent follows autonomously.
+   *
+   * Naming a command that does not exist is worse than saying nothing — the
+   * reader burns a cycle discovering it, and an agent cannot discover it at all.
+   * So: every `/agents <sub>` this text mentions must be a real subcommand.
+   */
+  it('names only /agents subcommands that actually dispatch', () => {
+    const real = realAgentsSubcommands();
+    expect(real).toContain('rebuild'); // sanity: the extraction found something
+
+    for (const text of [SYNC_REMOVED_MESSAGE, SYNC_REMOVED_DESCRIPTION, LIVE_TEAM_CHANGE_HINT]) {
+      const named = [...text.matchAll(/\/agents\s+([a-z]+)/g)].map((m) => m[1]);
+      const dead = named.filter((sub) => !real.includes(sub));
+      expect(dead).toEqual([]);
+    }
+  });
+
+  it('does not resurrect the specific dead syntax', () => {
+    for (const text of [SYNC_REMOVED_MESSAGE, SYNC_REMOVED_DESCRIPTION, LIVE_TEAM_CHANGE_HINT]) {
+      expect(text).not.toContain('/agents spawn');
+      expect(text).not.toContain('/agents remove');
+    }
+  });
+
+  it('the live-team hint names the real add/remove/model surfaces', () => {
+    // POST /agents/spawn is a ROUTE, not an /agents subcommand — the slash is
+    // part of the path, which is exactly why the two got confused.
+    expect(LIVE_TEAM_CHANGE_HINT).toContain('/model <agent> <model>');
+    expect(LIVE_TEAM_CHANGE_HINT).toContain('/delete <agent>');
+    expect(LIVE_TEAM_CHANGE_HINT).toContain('id-agents spawn <name>');
+    expect(LIVE_TEAM_CHANGE_HINT).toContain('POST /agents/spawn');
   });
 
   it('leads the short description with REMOVED so truncation cannot hide it', () => {

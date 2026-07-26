@@ -14,8 +14,8 @@ needs to be told what replaced it.
 | You used `/sync` to…                        | Use now |
 |---------------------------------------------|---------|
 | See what a config would change               | `/diff <team> <config>` — read-only, changes nothing |
-| Add an agent to a live team                  | `/agents spawn <name> …` |
-| Remove an agent from a live team             | `/agents remove <name>` |
+| Add an agent to a live team                  | `id-agents spawn <name> [model]`, or `POST /agents/spawn` |
+| Remove an agent from a live team             | `/delete <agent>` |
 | Change a model                               | `/model <agent> <model>` |
 | Get a config file back out of a live team    | `/export <team> [path]` |
 | Stand up a team from a config file           | `/import <file> [--team <name>]` (new team) or `/deploy <config>` (new team only) |

@@ -24,7 +24,7 @@ import { AgentRestServer } from './agent-rest-server.js';
 import { defaultDeliverFn, redactSshTarget, type DeliverFn } from './lib/ssh-deliver.js';
 import { probeRemoteAgent, defaultHealthProbeFn, type HealthProbeFn } from './lib/remote-heartbeat.js';
 import { filterClaudeEnvVars } from './lib/env-hygiene.js';
-import { SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
+import { LIVE_TEAM_CHANGE_HINT, SYNC_REMOVED_MESSAGE } from './lib/sync-removed.js';
 import {
   agentWorkdirRoots,
   auditWorkdirs,
@@ -6036,7 +6036,10 @@ export class AgentManagerDb {
               ok: false,
               httpStatus: 409,
               error: 'team_exists',
-              message: `Team "${targetTeamName}" already exists. /deploy only creates new teams. To change a live team use /agents spawn, /agents remove, or /model. To inspect drift, /diff <team> <config>.`,
+              // #6bcd3201: the hint is shared so it cannot name a command that
+              // does not exist — the previous text pointed at /agents spawn and
+              // /agents remove, neither of which has a handler.
+              message: `Team "${targetTeamName}" already exists. /deploy only creates new teams. ${LIVE_TEAM_CHANGE_HINT} To inspect drift, /diff <team> <config>.`,
             };
           }
         }

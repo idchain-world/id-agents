@@ -21,8 +21,9 @@ This skill enables Claude Code to act as an **admin agent** for the ID Agents ma
 
 | Goal | Command | Notes |
 |---|---|---|
-| Add a new agent | `/agents spawn <name> ...` | The database is the source of truth — editing YAML does NOT add an agent. `/agents rebuild` will not pick it up either. |
-| Change a model, runtime, skills, or working dir | `/model <agent> <model>`, or `/agents remove` + `/agents spawn` | Surgical commands only. `/sync` is REMOVED: a config file may no longer overwrite the database. |
+| Add a new agent | `id-agents spawn <name> [model]`, or `POST /agents/spawn` | The database is the source of truth — editing YAML does NOT add an agent. `/agents rebuild` will not pick it up either. There is no `/agents spawn`. |
+| Change a model | `/model <agent> <model>` | Surgical commands only. `/sync` is REMOVED: a config file may no longer overwrite the database. |
+| Remove an agent | `/delete <agent>` | Hard-deletes the row and stops the process. |
 | Restart agents (no config change) | `/agents rebuild` | restarts existing agents from DB |
 | Start clean from YAML | `/deploy <team>` | nuke and recreate |
 | Wipe working dirs too | `/agents reset` | destructive — confirms before running |
@@ -200,7 +201,7 @@ Each event has `seq` (cursor), `team`, `topic`, `actor`, `subject`, and a `data`
 | Command | Description |
 |---------|-------------|
 | `/agents` | List all agents |
-| `/agents rebuild` | Restart existing agents from DB. Does NOT add agents — use `/agents spawn` (see "Adding an agent to a team"). |
+| `/agents rebuild` | Restart existing agents from DB. Does NOT add agents — use `id-agents spawn <name>` or `POST /agents/spawn` (see "Adding an agent to a team"). |
 | `/agents probe` | Dispatch-path health probe across every running agent in the team. See "Probe — verify agents respond on `/talk`" below. |
 | `/status` | Show team health |
 | `/deploy <config> [params]` | Deploy agents from config (e.g. `/deploy idchain`) |
@@ -230,7 +231,7 @@ Each event has `seq` (cursor), `team`, `topic`, `actor`, `subject`, and a `data`
 
 `/agents probe` and `/agent <name> probe` both POST a minimal `reply with OK` message to each target agent's local `/talk` endpoint, capture the returned `query_id`, then wait for that query to reach `completed` or `failed` on `/query/:id`. They traverse the same dispatch hop real `/ask` and `/talk-to` traffic uses, so a green probe is direct evidence the agent's HTTP listener is up and the harness can actually complete a dispatch; a red probe pinpoints whether the failure is transport-level (timeout / connection refused) or the deeper spawn-succeeds-but-LLM-fails class (`401: Invalid authentication credentials`, empty result, etc.).
 
-**When to run it.** After every `/deploy`, `/import` or `/agents spawn` — especially when the manager was started inside another Claude Code session, where the spawn races are easier to hit. Also when an `/ask <agent>` hangs and you want to disambiguate "agent is busy" from "agent's process is wedged" before paging anyone.
+**When to run it.** After every `/deploy`, `/import` or `id-agents spawn` — especially when the manager was started inside another Claude Code session, where the spawn races are easier to hit. Also when an `/ask <agent>` hangs and you want to disambiguate "agent is busy" from "agent's process is wedged" before paging anyone.
 
 **Not wired into any command.** This is operator-driven: reconciliation and health verification are separate jobs, and `/diff` deliberately only reports drift.
 
@@ -312,7 +313,7 @@ The wake message contains **no work instructions**. The agent must read `HEARTBE
 1. Pick (or create) a dedicated working directory for the agent. If the agent will operate on another repo, it can do so via absolute paths from this dir.
 2. Write `HEARTBEAT.md` at that directory's root. The file IS the algorithm; describe exactly what to read, what to do, how much to do per beat (one item, a batch of N, until a wall-clock budget, etc.), and what one-line reply to send. Tell the agent to re-read `HEARTBEAT.md` from disk every beat (mirroring the manager's wake message).
 3. Add the agent to the team YAML with `workingDirectory:` pointing at that dir and `heartbeat: <seconds>`.
-4. `/agents spawn <name> ...` for a live team, or `/deploy <team>` for a NEW one (deploy is create-only).
+4. `id-agents spawn <name> [model]` (or `POST /agents/spawn`) for a live team, or `/deploy <team>` for a NEW one (deploy is create-only).
 5. Verify with `/heartbeat <agent>`: `intervalSeconds` set, `scheduleActive: true`. The first beat fires inside the interval.
 
 ### Anti-patterns
@@ -351,7 +352,7 @@ Certain agent names collide with CLI commands or daemon-owned identities and are
 
 ## Agent Library & Team Configuration
 
-The v3 agent-config system separates **persona templates** (the library) from **team membership** (team YAMLs). A team YAML with a library reference creates those agents on `/deploy` of a NEW team, or on `/import`. To add one to a LIVE team, use `/agents spawn --agent <library-entry>`.
+The v3 agent-config system separates **persona templates** (the library) from **team membership** (team YAMLs). A team YAML with a library reference creates those agents on `/deploy` of a NEW team, or on `/import`. To add one to a LIVE team, use `POST /agents/spawn` with `{"name": "<name>", "agent": "<library-entry>"}` — the HTTP route accepts the library overlay, the `id-agents spawn` CLI does not.
 
 ### Listing library entries
 
@@ -396,7 +397,7 @@ ls "$(jq -r '.libraryRoot' <<<"$(curl -sS $MGR/library/agents)")/agents"
 
    The `agent:` field pulls the persona (CLAUDE.md / AGENTS.md + bundled skills) from `configs/agents/<name>/` at create time (deploy, import or spawn). Omit `agent:` for a bare persona where you write the prompt inline via `description:` only. `skills:` on an agent entry is additive on top of the library entry's skills.
 
-2. **Sync the team.** This rebuilds working-directory artifacts (CLAUDE.md sidecar for Claude, marker-fenced AGENTS.md append for Codex/Cursor) for every agent whose template-derived hash changed:
+2. **Refresh working-directory artifacts.** This rebuilds them (CLAUDE.md sidecar for Claude, marker-fenced AGENTS.md append for Codex/Cursor) for every agent whose template-derived hash changed:
 
    ```bash
    MGR="${MANAGER_URL:-http://127.0.0.1:4100}"
@@ -414,7 +415,7 @@ ls "$(jq -r '.libraryRoot' <<<"$(curl -sS $MGR/library/agents)")/agents"
      | jq '.agents[] | select(.name=="copy") | {name,runtime,workingDirectory,agent}'
    ```
 
-   And eyeball the whole team in one pass — useful after every `/deploy`, `/import`, `/agents spawn` or `/agents rebuild`:
+   And eyeball the whole team in one pass — useful after every `/deploy`, `/import`, `id-agents spawn` or `/agents rebuild`:
 
    ```bash
    curl -sS "$MGR/agents" ${ID_TEAM:+-H "X-Id-Team: $ID_TEAM"} \
@@ -431,7 +432,7 @@ ls "$(jq -r '.libraryRoot' <<<"$(curl -sS $MGR/library/agents)")/agents"
 
 **Do not edit `configs/agents/<name>/CLAUDE.md` to customize one team's agent.** That file is the shared library entry — changes there propagate to every team using it. Override per-team via the YAML's `description:` and `skills:` fields, or fork the library entry under a new name.
 
-**Editing a team YAML no longer changes a live team.** The database is the source of truth (D3) and `/sync` is REMOVED, so the manager never rehydrates a running team from disk. Change live agents with `/agents spawn`, `/agents remove` and `/model`; use `/diff <team> <config>` to see how a config and the live team differ, and `/export` to write the database back out to YAML.
+**Editing a team YAML no longer changes a live team.** The database is the source of truth (D3) and `/sync` is REMOVED, so the manager never rehydrates a running team from disk. Change live agents with `id-agents spawn <name>` (or `POST /agents/spawn`), `/delete <agent>` and `/model <agent> <model>`; use `/diff <team> <config>` to see how a config and the live team differ, and `/export` to write the database back out to YAML.
 
 ## Polling for Agent Replies
 
