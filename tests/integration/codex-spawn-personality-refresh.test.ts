@@ -7,7 +7,7 @@
  *
  * 1. **Behavioral**: imports the actual `PROTOCOL_DEFAULTS` constant and
  *    invokes `writePersonalityFile` + `appendLibraryPersonaToAgentsMd`
- *    in the same sequence the four spawn-flow paths in
+ *    in the same sequence the spawn-flow paths in
  *    src/agent-manager-db.ts use. Pre-edits AGENTS.md with user content
  *    above, between, and below the managed blocks; redeploys with
  *    rotated library content; asserts every pocket of user content
@@ -171,11 +171,21 @@ describe('agent-manager-db spawn-flow wiring guard', () => {
     expect(source).not.toMatch(/writeFileSync\(\s*personalityPath/);
   });
 
-  it('all four spawn-flow paths call writePersonalityFile + appendLibraryPersonaToAgentsMd', () => {
+  it('every spawn-flow path calls writePersonalityFile + appendLibraryPersonaToAgentsMd', () => {
     const writeCalls = source.match(/writePersonalityFile\(workingDirectory,/g) ?? [];
     const appendCalls = source.match(/appendLibraryPersonaToAgentsMd\(workingDirectory,/g) ?? [];
-    expect(writeCalls.length).toBe(4);
-    expect(appendCalls.length).toBe(4);
+
+    // Was 4 until commit 9 removed /sync (D2). Two of the four were sync's own
+    // branches — the added-agent path and the changed-agent rebuild — so both
+    // went with it, leaving spawn and deploy. The GUARANTEE is unchanged: every
+    // remaining creation path still writes a personality file. Only the number
+    // of paths moved, which is the point of counting them by name rather than
+    // trusting a magic number.
+    const SPAWN_FLOW_PATHS = 2; // spawn (:3113), deploy (:6109)
+    expect(writeCalls.length).toBe(SPAWN_FLOW_PATHS);
+    expect(appendCalls.length).toBe(SPAWN_FLOW_PATHS);
+    // The real invariant: the two always travel together, whatever the count.
+    expect(appendCalls.length).toBe(writeCalls.length);
   });
 
   it('writePersonalityFile is imported from config-parser', () => {

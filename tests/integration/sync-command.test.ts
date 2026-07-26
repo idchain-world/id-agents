@@ -1,339 +1,181 @@
 // SPDX-License-Identifier: MIT
 /**
- * /sync Command Integration Tests
+ * /sync is REMOVED — SPEC §9 (D2), commit 9.
  *
- * Tests the /sync reconciliation command and the /deploy orphan-process fix.
+ * This file used to exercise the /sync reconciliation command. That command no
+ * longer exists: the diff-driven mutation and the YAML-as-floor merge are
+ * deleted outright rather than hidden behind a flag, because a config file is
+ * no longer a source of truth that may overwrite the database.
  *
- * Prerequisites:
- * - Manager must be running (`npm start` in CLI)
- * - ANTHROPIC_API_KEY or Claude CLI auth must be available
- * - configs/default.yaml must exist (used for test deploys)
+ * MIGRATED, NOT DELETED. What the old suite asserted, and where that coverage
+ * lives now:
  *
- * Run with: npm test
+ *   'show plan without making changes'      -> /diff, tests/integration/diff-read-only.test.ts
+ *                                              (and its five-part no-mutation test)
+ *   'skip unchanged agents'                 -> /diff `unchanged`, same file
+ *   'preserve agent ID on in-place update'  -> in-place update is GONE (D1). The
+ *                                              surviving guarantee — a refused
+ *                                              deploy leaves every id
+ *                                              byte-identical — is in
+ *                                              deploy-create-only.test.ts
+ *   'repeated syncs of unchanged skills'    -> skill deployment via
+ *                                              deploySkillsToAgent is asserted in
+ *                                              spawn-parity.test.ts
+ *   'reconcile running team with config'    -> CAPABILITY REMOVED by D2. Its
+ *                                              replacement is /export + /import
+ *                                              (round-trip coverage in
+ *                                              import-team-config.test.ts and
+ *                                              roundtrip-every-config-key.test.ts)
+ *   'kill old process when redeploying'     -> CAPABILITY REMOVED by D1 §4.1;
+ *                                              the recreate block was deleted in
+ *                                              commit 4
+ *
+ * WORTH KNOWING: the old suite was `describe.skipIf(!process.env.ID_CONTROL_API_KEY)`
+ * and that variable is not set here, so it had been SKIPPING — it contributed no
+ * actual coverage at the point it was removed. The tests below deliberately have
+ * no such gate: they run everywhere, on fixtures.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import * as fs from 'fs';
-import * as path from 'path';
-import {
-  waitForManager,
-  listAgents,
-  deleteAgentByName,
-  remote,
-  remoteSync,
-  remoteDeleteTeam,
-} from '../helpers/manager-client.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import * as net from 'net';
 
-const TEST_SUFFIX = Date.now().toString(36);
-const TEST_CONFIG_PATH = `/tmp/sync-test-${TEST_SUFFIX}.yaml`;
+import { AgentManagerDb } from '../../src/agent-manager-db.js';
+import { SqliteAdapter } from '../../src/db/sqlite-adapter.js';
+import { migrateSqlite } from '../../src/db/migrations/sqlite.js';
+import { SqliteTeamsRepo } from '../../src/db/repos/sqlite/teams-repo.js';
+import { SqliteAgentsRepo } from '../../src/db/repos/sqlite/agents-repo.js';
+import { SqliteQueriesRepo } from '../../src/db/repos/sqlite/queries-repo.js';
+import { SqliteNewsRepo } from '../../src/db/repos/sqlite/news-repo.js';
+import { SqliteSchedulesRepo } from '../../src/db/repos/sqlite/schedules-repo.js';
+import { SqliteTasksRepo } from '../../src/db/repos/sqlite/tasks-repo.js';
+import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
+import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
+import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 
-const AGENT_A = `sync-a-${TEST_SUFFIX}`;
-const AGENT_B = `sync-b-${TEST_SUFFIX}`;
-const AGENT_C = `sync-c-${TEST_SUFFIX}`;
-const SKILL_TEST_TEAM = `sync-skills-${TEST_SUFFIX}`;
-const SKILL_TEST_CONFIG_PATH = `/tmp/sync-skills-${TEST_SUFFIX}.yaml`;
-const SKILL_AGENT_A = `skills-a-${TEST_SUFFIX}`;
-const SKILL_AGENT_B = `skills-b-${TEST_SUFFIX}`;
-const SKILL_AGENT_C = `skills-c-${TEST_SUFFIX}`;
+async function createInMemoryDb() {
+  const adapter = new SqliteAdapter(':memory:');
+  await migrateSqlite(adapter);
+  return {
+    adapter,
+    teams: new SqliteTeamsRepo(adapter),
+    agents: new SqliteAgentsRepo(adapter),
+    queries: new SqliteQueriesRepo(adapter),
+    news: new SqliteNewsRepo(adapter),
+    schedules: new SqliteSchedulesRepo(adapter),
+    tasks: new SqliteTasksRepo(adapter),
+    events: new SqliteEventsRepo(adapter),
+    subscriptions: new SqliteSubscriptionsRepo(adapter),
+    checkins: new SqliteCheckinsRepo(adapter),
+    async close() { await adapter.close(); },
+  };
+}
 
-let yamlDump: (obj: any) => string;
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address() as { port: number };
+      server.close(() => resolve(addr.port));
+    });
+    server.on('error', reject);
+  });
+}
 
-// Opt-in: requires a running external manager + ID_CONTROL_API_KEY. Run via `npm run test:e2e`.
-// The 3 previously-failing tests (reconcile, preserve agent ID, unchanged skip) depend on a live
-// manager that can accept /remote /sync commands. Without the API key they return ok:false, which
-// is environment-driven, not assertion drift — so skipping here keeps the default test run green.
-describe.skipIf(!process.env.ID_CONTROL_API_KEY)('Sync Command', () => {
-  beforeAll(async () => {
-    const yaml = await import('js-yaml');
-    yamlDump = yaml.default.dump;
+const TEAM = 'sync-removed-team';
 
-    const isHealthy = await waitForManager(30000);
-    if (!isHealthy) {
-      throw new Error('Manager not healthy. Start the manager with `npm start` before running tests.');
-    }
+describe('/sync removal contract (§9, D2)', () => {
+  let db: Awaited<ReturnType<typeof createInMemoryDb>>;
+  let manager: AgentManagerDb;
+  let baseUrl: string;
+  let workDir: string;
+
+  beforeEach(async () => {
+    const port = await findFreePort();
+    baseUrl = `http://127.0.0.1:${port}`;
+    workDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sync-gone-')));
+    db = await createInMemoryDb();
+    manager = new AgentManagerDb(workDir, db as any);
+    await manager.start(port);
+    await db.teams.getOrCreateTeamId(TEAM);
   });
 
-  afterAll(async () => {
-    // Clean up test agents
-    for (const name of [AGENT_A, AGENT_B, AGENT_C]) {
-      try { await deleteAgentByName(name); } catch { /* ignore */ }
-    }
-    try { await remoteDeleteTeam(SKILL_TEST_TEAM); } catch { /* ignore */ }
-    for (const name of [SKILL_AGENT_A, SKILL_AGENT_B, SKILL_AGENT_C]) {
-      try { await deleteAgentByName(name); } catch { /* ignore */ }
-    }
-    // Clean up test config
-    try { fs.unlinkSync(TEST_CONFIG_PATH); } catch { /* ignore */ }
-    try { fs.unlinkSync(SKILL_TEST_CONFIG_PATH); } catch { /* ignore */ }
+  afterEach(async () => {
+    await manager.shutdown().catch(() => {});
+    await new Promise<void>((resolve) => {
+      (manager as any).httpServer?.close(() => resolve());
+      setTimeout(resolve, 300);
+    });
+    await db.close();
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
-  function writeConfig(agents: Array<{ name: string; description?: string; model?: string }>) {
-    const config = {
-      version: '1',
-      defaults: { model: 'claude-haiku-4-5-20251001' },
-      agents: agents.map(a => ({
-        name: a.name,
-        description: a.description || `Test agent ${a.name}`,
-        ...(a.model && { model: a.model }),
-      })),
-    };
-    fs.writeFileSync(TEST_CONFIG_PATH, yamlDump(config));
+  async function run(command: string) {
+    const resp = await fetch(`${baseUrl}/remote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Id-Team': TEAM, 'X-Id-Admin': '1' },
+      body: JSON.stringify({ command }),
+    });
+    return { status: resp.status, body: await resp.json() as any };
   }
 
-  describe('Sync dry-run', () => {
-    it('should show plan without making changes', async () => {
-      // First deploy two agents
-      writeConfig([
-        { name: AGENT_A, description: 'Agent A' },
-        { name: AGENT_B, description: 'Agent B' },
-      ]);
-
-      const deployResult = await remote(`/deploy ${TEST_CONFIG_PATH}`);
-      expect(deployResult.ok).toBe(true);
-      expect((deployResult.data as any).ok).toBe(true);
-
-      // Wait for agents to start
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Now write a modified config: change A's model, add C, remove B
-      writeConfig([
-        { name: AGENT_A, description: 'Agent A', model: 'claude-sonnet-4-6' },
-        { name: AGENT_C, description: 'Agent C' },
-      ]);
-
-      // Run sync with --dry-run
-      const syncResult = await remoteSync(TEST_CONFIG_PATH, {}, ['--dry-run']);
-      expect(syncResult.ok).toBe(true);
-
-      const data = (syncResult.data as any).result;
-      expect(data.dryRun).toBe(true);
-      expect(data.summary).toBeDefined();
-      expect(data.plan).toBeDefined();
-
-      // Verify plan categories
-      expect(data.plan.added).toContain(AGENT_C);
-      expect(data.plan.removed).toContain(AGENT_B);
-
-      // A should be changed (model differs)
-      const updatedNames = data.plan.updated.map((u: any) => typeof u === 'string' ? u : u.name);
-      expect(updatedNames).toContain(AGENT_A);
-
-      // Verify no actual changes were made — B should still be running
-      const agents = await listAgents();
-      const agentB = (agents.data as any[]).find((a: any) => a.name === AGENT_B);
-      expect(agentB).toBeDefined();
-    }, 120000);
+  it('rejects /sync', async () => {
+    expect((await run('/sync some-config')).body.ok).toBe(false);
   });
 
-  describe('Sync execution', () => {
-    it('should reconcile running team with config', async () => {
-      // At this point, agents A and B are deployed from the dry-run test.
-      // Config has A (changed model) and C (new), missing B (to remove).
-      writeConfig([
-        { name: AGENT_A, description: 'Agent A', model: 'claude-sonnet-4-6' },
-        { name: AGENT_C, description: 'Agent C' },
-      ]);
+  it('NAMES every replacement in the error, so nobody hunts for a bug', async () => {
+    // §10.11. The value of this message is that /sync lives in muscle memory
+    // and in skill files; a bare "unknown command" would read like a break.
+    const error = String((await run('/sync')).body.error);
 
-      const syncResult = await remoteSync(TEST_CONFIG_PATH);
-      expect(syncResult.ok).toBe(true);
-
-      const data = (syncResult.data as any).result;
-      expect(data.added).toContain(AGENT_C);
-      expect(data.removed).toContain(AGENT_B);
-      expect(data.updated).toContain(AGENT_A);
-      expect(data.summary).toBeDefined();
-
-      // Wait for spawns
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Verify final state
-      const agents = await listAgents();
-      const agentList = agents.data as any[];
-      const names = agentList.map((a: any) => a.name);
-
-      expect(names).toContain(AGENT_A);
-      expect(names).toContain(AGENT_C);
-      expect(names).not.toContain(AGENT_B);
-    }, 120000);
-
-    it('should preserve agent ID on in-place update', async () => {
-      // Record A's current ID
-      const agentsBefore = await listAgents();
-      const agentA = (agentsBefore.data as any[]).find((a: any) => a.name === AGENT_A);
-      const originalId = agentA?.id;
-      expect(originalId).toBeDefined();
-
-      // Sync again with a description change for A
-      writeConfig([
-        { name: AGENT_A, description: 'Agent A updated again', model: 'claude-sonnet-4-6' },
-        { name: AGENT_C, description: 'Agent C' },
-      ]);
-
-      const syncResult = await remoteSync(TEST_CONFIG_PATH);
-      expect(syncResult.ok).toBe(true);
-
-      const data = (syncResult.data as any).result;
-      expect(data.updated).toContain(AGENT_A);
-      expect(data.unchanged).toContain(AGENT_C);
-
-      // Wait for respawn
-      await new Promise(r => setTimeout(r, 3000));
-
-      // Verify A kept same ID
-      const agentsAfter = await listAgents();
-      const agentAAfter = (agentsAfter.data as any[]).find((a: any) => a.name === AGENT_A);
-      expect(agentAAfter?.id).toBe(originalId);
-    }, 120000);
-
-    it('should skip unchanged agents', async () => {
-      // Sync with same config — everything should be unchanged
-      const syncResult = await remoteSync(TEST_CONFIG_PATH);
-      expect(syncResult.ok).toBe(true);
-
-      const data = (syncResult.data as any).result;
-      expect(data.added.length).toBe(0);
-      expect(data.removed.length).toBe(0);
-      expect(data.updated.length).toBe(0);
-      expect(data.unchanged.length).toBe(2);
-    }, 60000);
-
-    it('treats repeated syncs of unchanged skills as a no-op and isolates a one-agent skill edit', async () => {
-      const writeSkillFixtureConfig = (agentASkills: string[]) => {
-        const config = {
-          version: '1',
-          team: SKILL_TEST_TEAM,
-          defaults: {
-            local: true,
-            runtime: 'claude-code-cli',
-            model: 'claude-haiku-4-5-20251001',
-          },
-          agents: [
-            {
-              name: SKILL_AGENT_A,
-              description: 'Skill determinism fixture A',
-              skills: agentASkills,
-            },
-            {
-              name: SKILL_AGENT_B,
-              description: 'Skill determinism fixture B',
-              skills: ['identity'],
-            },
-            {
-              name: SKILL_AGENT_C,
-              description: 'Skill determinism fixture C',
-              skills: ['task-discipline'],
-            },
-          ],
-        };
-        fs.writeFileSync(SKILL_TEST_CONFIG_PATH, yamlDump(config));
-      };
-
-      writeSkillFixtureConfig(['identity', 'inter-agent']);
-
-      const first = await remoteSync(SKILL_TEST_CONFIG_PATH);
-      expect(first.ok).toBe(true);
-
-      const firstData = (first.data as any).result;
-      expect(firstData.added.sort()).toEqual([SKILL_AGENT_A, SKILL_AGENT_B, SKILL_AGENT_C].sort());
-      expect(firstData.updated).toEqual([]);
-      expect(firstData.removed).toEqual([]);
-      expect(firstData.unchanged).toEqual([]);
-
-      await new Promise(r => setTimeout(r, 3000));
-
-      const second = await remoteSync(SKILL_TEST_CONFIG_PATH);
-      expect(second.ok).toBe(true);
-
-      const secondData = (second.data as any).result;
-      expect(secondData.summary).toBe('Added 0, updated 0, removed 0, unchanged 3');
-      expect(secondData.added).toEqual([]);
-      expect(secondData.updated).toEqual([]);
-      expect(secondData.removed).toEqual([]);
-      expect(secondData.unchanged.sort()).toEqual([SKILL_AGENT_A, SKILL_AGENT_B, SKILL_AGENT_C].sort());
-
-      writeSkillFixtureConfig(['identity', 'inter-agent', 'catalog']);
-
-      const dryRun = await remoteSync(SKILL_TEST_CONFIG_PATH, {}, ['--dry-run']);
-      expect(dryRun.ok).toBe(true);
-
-      const dryRunData = (dryRun.data as any).result;
-      expect(dryRunData.summary).toBe('Added 0, updated 1, removed 0, unchanged 2');
-      expect(dryRunData.plan.added).toEqual([]);
-      expect(dryRunData.plan.removed).toEqual([]);
-      expect(dryRunData.plan.unchanged.sort()).toEqual([SKILL_AGENT_B, SKILL_AGENT_C].sort());
-      expect(dryRunData.plan.updated).toEqual([
-        { name: SKILL_AGENT_A, changes: ['skills'] },
-      ]);
-    }, 120000);
+    expect(error).toContain('/sync has been removed');
+    expect(error).toContain('/export');
+    expect(error).toContain('/import');
+    expect(error).toContain('/diff');
+    expect(error).toContain('/agents spawn');
+    // And it says WHY, not just what to type instead.
+    expect(error).toContain('source of truth');
   });
-});
 
-// Opt-in: same reason as above.
-describe.skipIf(!process.env.ID_CONTROL_API_KEY)('Deploy orphan-process fix', () => {
-  const ORPHAN_AGENT = `orphan-test-${TEST_SUFFIX}`;
-  const ORPHAN_CONFIG_PATH = `/tmp/orphan-test-${TEST_SUFFIX}.yaml`;
-
-  let yamlDump: (obj: any) => string;
-
-  beforeAll(async () => {
-    const yaml = await import('js-yaml');
-    yamlDump = yaml.default.dump;
-
-    const isHealthy = await waitForManager(30000);
-    if (!isHealthy) {
-      throw new Error('Manager not healthy.');
+  it('rejects /sync with arguments too, not just the bare form', async () => {
+    for (const variant of ['/sync', '/sync idchain', '/sync configs/team.yaml --dry-run']) {
+      const { body } = await run(variant);
+      expect(body.ok).toBe(false);
+      expect(String(body.error)).toContain('/sync has been removed');
     }
   });
 
-  afterAll(async () => {
-    try { await deleteAgentByName(ORPHAN_AGENT); } catch { /* ignore */ }
-    try { fs.unlinkSync(ORPHAN_CONFIG_PATH); } catch { /* ignore */ }
+  it('leaves a genuinely unknown command with the ordinary error', async () => {
+    // The sync branch must be specific to sync, not swallow every unknown verb.
+    const error = String((await run('/floopdedoop')).body.error);
+    expect(error).toContain('Unknown command: floopdedoop');
+    expect(error).not.toContain('/sync has been removed');
   });
 
-  it('should kill old process when redeploying same agent', async () => {
-    // Write config with one agent
-    const config = {
-      version: '1',
-      defaults: { model: 'claude-haiku-4-5-20251001' },
-      agents: [{ name: ORPHAN_AGENT, description: 'Orphan test' }],
-    };
-    fs.writeFileSync(ORPHAN_CONFIG_PATH, yamlDump(config));
+  it('advertises the replacements in the available-command list', async () => {
+    const error = String((await run('/floopdedoop')).body.error);
+    for (const verb of ['export', 'import', 'diff']) expect(error).toContain(verb);
+  });
 
-    // Deploy
-    const deploy1 = await remote(`/deploy ${ORPHAN_CONFIG_PATH}`);
-    expect(deploy1.ok).toBe(true);
-    expect((deploy1.data as any).ok).toBe(true);
+  it('mutates nothing when /sync is attempted against a live team', async () => {
+    const teamId = await db.teams.getOrCreateTeamId(TEAM);
+    await db.agents.create({
+      team_id: teamId, id: 'local_keep', name: 'keep', type: 'claude',
+      model: 'claude-haiku-4-5-20251001', status: 'running', created_at: Date.now(),
+      runtime: 'claude-code-cli', metadata: { description: 'must survive' },
+    } as any);
 
-    await new Promise(r => setTimeout(r, 3000));
+    const snapshot = async () =>
+      (await db.agents.listAll(teamId))
+        .map((r) => JSON.stringify({ id: r.id, name: r.name, metadata: r.metadata }))
+        .sort();
 
-    // Record old port
-    const agents1 = await listAgents();
-    const agent1 = (agents1.data as any[]).find((a: any) => a.name === ORPHAN_AGENT);
-    expect(agent1).toBeDefined();
-    const oldPort = agent1.port;
-
-    // Redeploy same config — agent should get new port, old process should be killed
-    const deploy2 = await remote(`/deploy ${ORPHAN_CONFIG_PATH}`);
-    expect(deploy2.ok).toBe(true);
-    expect((deploy2.data as any).ok).toBe(true);
-
-    await new Promise(r => setTimeout(r, 3000));
-
-    // Verify new port is different
-    const agents2 = await listAgents();
-    const agent2 = (agents2.data as any[]).find((a: any) => a.name === ORPHAN_AGENT);
-    expect(agent2).toBeDefined();
-    expect(agent2.port).not.toBe(oldPort);
-
-    // Verify old port has no process (the fix)
-    let oldPortInUse = false;
-    try {
-      const { execSync } = await import('child_process');
-      execSync(`lsof -ti :${oldPort}`, { encoding: 'utf8' });
-      oldPortInUse = true;
-    } catch {
-      oldPortInUse = false;
-    }
-    expect(oldPortInUse).toBe(false);
-  }, 120000);
+    const before = await snapshot();
+    await run('/sync anything');
+    // The old /sync could delete and recreate rows; the removed command must
+    // retain no residue of that behaviour.
+    expect(await snapshot()).toEqual(before);
+  });
 });
