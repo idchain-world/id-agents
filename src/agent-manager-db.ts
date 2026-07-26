@@ -994,29 +994,46 @@ export class AgentManagerDb {
   }
 
   /**
-   * The team's `org` block, for callers that do not have a parsed config.
+   * The team's `org` block. THE single reader — spawn, /export and auto-export
+   * all come through here, so there is one definition of where org lives.
    *
-   * Deploy holds the parsed config when it needs `org`; spawn does not. Nothing
-   * ever writes `org` into the teams config row — the only two updateConfig
-   * calls write `last_config_path` and nothing else — so it is recovered by
-   * reading the config file the team recorded.
+   * The database is the source of truth, so the teams row is preferred. Deploy
+   * persists the parsed block there at create time.
    *
-   * Best-effort by design: a missing, moved or unparseable config yields no org
-   * context, exactly as deploy treats a failed generateAgentOrgContext. An
-   * agent must still spawn when its team's config file has been moved away.
+   * LEGACY FALLBACK: teams deployed before that persistence existed have no
+   * org in the row, and their org would otherwise vanish from every export.
+   * Those fall back to reading `last_config_path` — but never silently: the
+   * caller gets a warning naming the file it had to reach for, because reading
+   * a file behind the database's back is exactly the coupling this build is
+   * removing, and it should be visible until those teams are re-exported.
+   *
+   * Any failure yields no org and no throw. A moved or unparseable config must
+   * not stop an agent spawning or an export completing.
    */
-  private async loadTeamOrg(teamId: string): Promise<OrgConfig | undefined> {
+  private async loadTeamOrg(
+    teamId: string,
+  ): Promise<{ org?: OrgConfig; warning?: string }> {
+    let configPath: unknown;
     try {
       const teamConfig = await this.db.teams.getConfig(teamId);
-      // Honour a persisted value if one ever starts being written.
-      if (teamConfig.org) return teamConfig.org as OrgConfig;
-
-      const configPath = teamConfig.last_config_path;
-      if (typeof configPath !== 'string' || !configPath) return undefined;
-      const parsed = yaml.load(readFileSync(configPath, 'utf-8')) as { org?: OrgConfig };
-      return parsed?.org;
+      if (teamConfig.org) return { org: teamConfig.org as OrgConfig };
+      configPath = teamConfig.last_config_path;
     } catch {
-      return undefined;
+      return {};
+    }
+
+    if (typeof configPath !== 'string' || !configPath) return {};
+    try {
+      const parsed = yaml.load(readFileSync(configPath, 'utf-8')) as { org?: OrgConfig };
+      if (!parsed?.org) return {}; // no org anywhere: nothing to report
+      return {
+        org: parsed.org,
+        warning:
+          `Team org block read from ${configPath} because it is not stored on the team row ` +
+          `(team predates org persistence). Re-export or re-deploy to store it in the database.`,
+      };
+    } catch {
+      return {}; // missing or unparseable — best effort, never fatal
     }
   }
 
@@ -1046,7 +1063,7 @@ export class AgentManagerDb {
       for (const agent of agents) {
         schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
       }
-      const teamConfig = await this.db.teams.getConfig(teamId);
+      const { org: teamOrg } = await this.loadTeamOrg(teamId);
       exportTeamConfig({
         teamName: team.name,
         agents: agents as unknown as Parameters<typeof exportTeamConfig>[0]['agents'],
@@ -1054,7 +1071,7 @@ export class AgentManagerDb {
         // last_config_path, which an automatic write must never touch.
         targetPath: autoExportPath(this.baseWorkDir, team.name),
         schedulesByAgent,
-        org: teamConfig.org,
+        org: teamOrg,
       });
     });
   }
@@ -3057,7 +3074,7 @@ export class AgentManagerDb {
         // §6.2 PARITY STEP 2 — org context. Deploy has the parsed config in
         // hand; spawn does not, so it recovers the team's `org` block from the
         // config file the team recorded.
-        const spawnOrg = await this.loadTeamOrg(teamId);
+        const { org: spawnOrg } = await this.loadTeamOrg(teamId);
         let spawnOrgContext = '';
         if (spawnOrg?.groups) {
           try {
@@ -5450,6 +5467,7 @@ export class AgentManagerDb {
           schedulesByAgent[agent.name] = await this.db.schedules.listSchedulesForAgent(agent.id);
         }
 
+        const { org: teamOrg, warning: orgWarning } = await this.loadTeamOrg(team.id);
         const teamConfig = await this.db.teams.getConfig(team.id);
         const targetPath = resolveExportPath(
           args[1],
@@ -5467,10 +5485,12 @@ export class AgentManagerDb {
           agents: agents as unknown as Parameters<typeof exportTeamConfig>[0]['agents'],
           targetPath,
           schedulesByAgent,
-          org: teamConfig.org,
+          org: teamOrg,
           profilesRoot,
           avatarsRoot,
         });
+        // A legacy team's org came from a file rather than the row — say so.
+        if (orgWarning) result.warnings.push(orgWarning);
         return { ok: true, result };
       }
 
@@ -6331,7 +6351,14 @@ export class AgentManagerDb {
 
         // Remember the config file for this team so runtime profile edits
         // (POST /agents/by-name/:name/profile) can persist back to YAML.
-        await this.db.teams.updateConfig(effectiveTeamId, { last_config_path: absolutePath });
+        // Persist the parsed org block alongside the config path. The database
+        // is the source of truth, so export reads org from HERE rather than
+        // re-reading the file — which is why /export previously emitted no org
+        // block at all: nothing ever wrote this field.
+        await this.db.teams.updateConfig(effectiveTeamId, {
+          last_config_path: absolutePath,
+          ...(org ? { org } : {}),
+        });
 
         for (const agentConfig of agents) {
           const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
