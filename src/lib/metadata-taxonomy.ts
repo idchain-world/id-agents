@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: MIT
+/**
+ * Metadata and column taxonomy — SPEC §3 and §3.2.
+ *
+ * The database is the source of truth; config files are import/export
+ * artifacts (D3). Deciding what may be written back out is therefore a
+ * classification problem, and this module is the single place that answers it.
+ *
+ * Two rules govern everything here:
+ *
+ *   1. ALLOW-LIST, NEVER DENY-LIST. An unlisted name classifies `unknown` and
+ *      callers must not export it. A key added to the system later is not
+ *      exported by accident — someone has to classify it here on purpose.
+ *      Silent omission is a data-loss bug, so callers are expected to report
+ *      every `unknown` they skip (§3.1 rule 1), not swallow it.
+ *
+ *   2. PLAIN DATA, NOT CONDITIONALS. Both taxonomies are inspectable tables.
+ *      The exporter (commit 2) reads them; it does not re-derive them.
+ *
+ * `AgentMetadata` is `[key: string]: any` (`src/core/types.ts:64`), so this
+ * list cannot be derived from the type and is maintained deliberately.
+ *
+ * NOTE: this module classifies. It does not decide export coverage on its own
+ * — agent state also lives in table columns (§3.2, below) and on the
+ * filesystem (§3.3, avatars). All three lists must be checked.
+ */
+
+/** Classification for a key inside the `agents.metadata` JSON blob (§3). */
+export type MetadataClass =
+  | 'config'      // came from the config file; export it
+  | 'runtime'     // process/session state; never export
+  | 'derived'     // recomputable from other state; never export, rebuild on import
+  | 'identifier'  // names a thing but grants nothing; export (D9, D10)
+  | 'unknown';    // not classified — do not export, report it
+
+/**
+ * Classification for an `agents` table column (§3.2).
+ *
+ * `never` is the reason this type is separate from MetadataClass: three
+ * columns are credential-or-sensitive and are excluded permanently, not as a
+ * matter of current policy. `per-key` marks the one column whose contents are
+ * delegated to the metadata taxonomy above.
+ */
+export type ColumnClass = MetadataClass | 'never' | 'per-key';
+
+/**
+ * §3. Every key observed in the live database, plus the config-derived keys
+ * with zero live rows. Row counts in comments are from the 46-agent snapshot
+ * re-derived on 2026-07-26 and are documentation, not behaviour.
+ */
+const METADATA_TAXONOMY: Readonly<Record<string, MetadataClass>> = Object.freeze({
+  // --- config-derived: written from the config file, exported ---
+  name: 'config',                        // 45
+  description: 'config',                 // 44
+  runtime: 'config',                     // 44
+  skills: 'config',                      // 44
+  plugins: 'config',                     // 44 — export DECLARED paths, not the
+                                         //      resolved localPlugins (§3.1 rule 3)
+  catalog: 'config',                     // 42
+  dangerouslySkipPermissions: 'config',  // 41
+  agent: 'config',                       // 18
+  heartbeat: 'config',                   // 16 — boolean only; the interval lives
+                                         //      in the schedules table (§3.1 rule 4)
+  bio: 'config',                         // 4
+  handles: 'config',                     // 3
+  wallet: 'config',                      // 2 — the opt-in boolean, not a wallet
+  effort: 'config',                      // 1
+  allowed_tools: 'config',               // 0
+  openMode: 'config',                    // 0
+  isAutomator: 'config',                 // 0
+
+  // --- runtime: process/session state, never exported ---
+  pid: 'runtime',                        // 44
+  ows_wallet: 'runtime',                 // 1 — D7: wallets are never exported
+  ows_address: 'runtime',                // 1 — D7
+
+  // --- derived: recomputed on import, never exported ---
+  service_type: 'derived',               // 45 — constant 'REST-AP'
+  endpoint: 'derived',                   // 45 — http://localhost:<port>
+  local: 'derived',                      // 44 — set post-spawn
+
+  // --- identifier: names something, grants nothing ---
+  agent_account: 'identifier',           // 1 — an Ethereum address (D10)
+
+  // DELIBERATELY ABSENT, classify as `unknown`:
+  //   role  (1 row, on `cto` in team `default`)
+  //     §3.1 rule 2. It has no dedicated writer: it arrives through
+  //     POST /agents/register, which spreads caller-supplied `metadata`
+  //     verbatim (agent-manager-db.ts:3248). `role` is a field of
+  //     AgentCatalog and belongs at metadata.catalog.role, so the
+  //     top-level copy is a stray.
+  //
+  //   mesh_member, mesh_reachable, public_endpoint, dmz,
+  //   allowed_inbound, allowed_outbound
+  //     Written by the public-agent-remote branch of POST /agents/register
+  //     (agent-manager-db.ts:3135-3143). Zero live rows carry them, which is
+  //     why §3 — derived from a snapshot — does not list them. They await a
+  //     deliberate classification decision. See the pinning test in
+  //     tests/unit/metadata-taxonomy.test.ts, and note that `mesh_member` is
+  //     read as an access gate at agent-manager-db.ts:1288 where ABSENT means
+  //     mesh-member, so dropping it on export fails OPEN.
+});
+
+/**
+ * §3.2. All 25 `agents` columns. Export builds its column list from this
+ * allow-list — never `SELECT *`, never "all columns except".
+ */
+const COLUMN_TAXONOMY: Readonly<Record<string, ColumnClass>> = Object.freeze({
+  // --- config-derived ---
+  name: 'config',                   // 46
+  type: 'config',                   // 46
+  model: 'config',                  // 46
+  runtime: 'config',                // 46
+  working_directory: 'config',      // 45 — expressible as `workingDirectory`
+  customer_domain: 'config',        // 1  — remote-endpoint runtime
+  public_endpoint_url: 'config',    // 1  — remote-endpoint runtime
+
+  // --- identifier: ENS handles. 0 live rows, so only fixtures can test these ---
+  token_id: 'identifier',           // 0 — D9
+  domain: 'identifier',             // 0 — D9
+
+  // --- NEVER: credential or sensitive. Not policy — permanent. ---
+  api_key: 'never',                 // 0 — grants access
+  ssh_target: 'never',              // 0 — redacted for non-admin callers
+  internal_endpoint_url: 'never',   // 1 — redacted for non-admin; LIVE on one agent
+
+  // --- runtime ---
+  id: 'runtime',                    // 46 — a new id is minted on import
+  port: 'runtime',                  // 46 — reallocated
+  status: 'runtime',                // 46
+  created_at: 'runtime',            // 46
+  deleted_at: 'runtime',            // 0
+  registry: 'runtime',              // 0
+  last_seen: 'runtime',             // 1
+  last_probed_at: 'runtime',        // 1
+  last_error: 'runtime',            // 1
+  consecutive_failures: 'runtime',  // 46 — NOT NULL DEFAULT 0
+
+  // --- derived ---
+  team_id: 'derived',               // 46 — from the target team
+  endpoint: 'derived',              // 45 — from the port
+
+  // --- delegated ---
+  metadata: 'per-key',              // 46 — classify each key with
+                                    //      classifyMetadataKey instead
+});
+
+/**
+ * The three columns that must never leave the database, as an independent
+ * source of truth.
+ *
+ * This is not a duplicate of the table above — it is a cross-check. The
+ * invariant below runs at module load, so changing `api_key` to 'config' in
+ * COLUMN_TAXONOMY does not quietly become exportable: importing this module
+ * throws. Reclassifying one of these has to be a two-file, on-purpose edit.
+ */
+export const NEVER_EXPORT_COLUMNS: readonly string[] = Object.freeze([
+  'api_key',
+  'ssh_target',
+  'internal_endpoint_url',
+]);
+
+// Load-time invariant: the two declarations above must agree, in both
+// directions. A column may be `never` if and only if it is in the list.
+for (const column of NEVER_EXPORT_COLUMNS) {
+  if (COLUMN_TAXONOMY[column] !== 'never') {
+    throw new Error(
+      `metadata-taxonomy: "${column}" is in NEVER_EXPORT_COLUMNS but classified ` +
+      `"${COLUMN_TAXONOMY[column] ?? 'unlisted'}" in COLUMN_TAXONOMY. ` +
+      `These columns are credential-or-sensitive and are excluded permanently (§3.2).`,
+    );
+  }
+}
+for (const [column, klass] of Object.entries(COLUMN_TAXONOMY)) {
+  if (klass === 'never' && !NEVER_EXPORT_COLUMNS.includes(column)) {
+    throw new Error(
+      `metadata-taxonomy: "${column}" is classified "never" but is missing from ` +
+      `NEVER_EXPORT_COLUMNS. Add it there too, on purpose.`,
+    );
+  }
+}
+
+/**
+ * Classify a key from the `agents.metadata` JSON blob (§3).
+ *
+ * Returns `unknown` for anything unlisted. Callers must not export an
+ * `unknown` key, and must report it rather than dropping it silently.
+ */
+export function classifyMetadataKey(key: string): MetadataClass {
+  return Object.prototype.hasOwnProperty.call(METADATA_TAXONOMY, key)
+    ? METADATA_TAXONOMY[key]
+    : 'unknown';
+}
+
+/**
+ * Classify an `agents` table column (§3.2).
+ *
+ * Returns `unknown` for anything unlisted, so a column added to the schema
+ * later is not exported until it is classified here.
+ */
+export function classifyAgentColumn(column: string): ColumnClass {
+  return Object.prototype.hasOwnProperty.call(COLUMN_TAXONOMY, column)
+    ? COLUMN_TAXONOMY[column]
+    : 'unknown';
+}
+
+/** Every metadata key this module classifies. Inspection helper for commit 2. */
+export function listClassifiedMetadataKeys(): string[] {
+  return Object.keys(METADATA_TAXONOMY);
+}
+
+/** Every column this module classifies. Inspection helper for commit 2. */
+export function listClassifiedColumns(): string[] {
+  return Object.keys(COLUMN_TAXONOMY);
+}
