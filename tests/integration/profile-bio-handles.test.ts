@@ -225,6 +225,91 @@ describe('agent profile bio/handles integration', () => {
     expect(meta.handles).toEqual({ x: '@profiledev' });
   });
 
+  // A bare "Agent not found" reads identically whether the name is wrong, the
+  // team is wrong, or the agent is gone. Naming the searched team is what turns
+  // a multi-agent investigation back into a one-line misconfiguration.
+  describe('agent-not-found names the team that was searched', () => {
+    it('names an explicitly-supplied wrong team on the profile route', async () => {
+      await deploy();
+      const resp = await fetch(`${baseUrl}/agents/by-name/${AGENT}/profile`, {
+        method: 'POST',
+        headers: adminHeaders('some-other-team'),
+        body: JSON.stringify({ bio: 'from the wrong team' }),
+      });
+      expect(resp.status).toBe(404);
+      const body = await resp.json() as { error: string };
+      expect(body.error).toContain('some-other-team');
+      expect(body.error).toContain(AGENT);
+      // Same request, correct team — proves the 404 was scope, not the name.
+      expect((await postProfile({ bio: 'from the right team' })).ok).toBe(true);
+    });
+
+    it('names the "default" fallback when the caller sends no team header', async () => {
+      await deploy();
+      // Exactly the desktop-app bug: no X-Id-Team, so getTeamName falls back.
+      // Clear the env inputs that outrank the fallback so 'default' is
+      // deterministic under any runner environment.
+      const prevTeam = process.env.ID_TEAM;
+      const prevProject = process.env.ID_PROJECT;
+      delete process.env.ID_TEAM;
+      delete process.env.ID_PROJECT;
+      try {
+        const resp = await fetch(`${baseUrl}/agents/by-name/${AGENT}/profile`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ bio: 'from a team-less caller' }),
+        });
+        expect(resp.status).toBe(404);
+        const body = await resp.json() as { error: string };
+        expect(body.error).toContain('default');
+      } finally {
+        if (prevTeam === undefined) delete process.env.ID_TEAM; else process.env.ID_TEAM = prevTeam;
+        if (prevProject === undefined) delete process.env.ID_PROJECT; else process.env.ID_PROJECT = prevProject;
+      }
+    });
+
+    // The sweep: every team-scoped agent lookup in the manager, not just the
+    // one route that was reported.
+    const WRONG_TEAM = 'no-such-team';
+    const MISSING_ID = 'agent_does_not_exist';
+    const MISSING_NAME = 'nosuchagent';
+    const scopedLookups: Array<{ label: string; method: string; path: string; body?: unknown; ref: string }> = [
+      { label: 'GET /agents/by-name/:name', method: 'GET', path: `/agents/by-name/${MISSING_NAME}`, ref: MISSING_NAME },
+      { label: 'POST /agents/by-name/:name/metadata', method: 'POST', path: `/agents/by-name/${MISSING_NAME}/metadata`, body: { metadata: {} }, ref: MISSING_NAME },
+      { label: 'POST /agents/by-name/:name/profile', method: 'POST', path: `/agents/by-name/${MISSING_NAME}/profile`, body: { bio: 'x' }, ref: MISSING_NAME },
+      { label: 'DELETE /agents/by-name/:name', method: 'DELETE', path: `/agents/by-name/${MISSING_NAME}`, ref: MISSING_NAME },
+      { label: 'GET /agents/:id', method: 'GET', path: `/agents/${MISSING_ID}`, ref: MISSING_ID },
+      { label: 'POST /agents/:id/metadata', method: 'POST', path: `/agents/${MISSING_ID}/metadata`, body: { metadata: {} }, ref: MISSING_ID },
+      { label: 'PATCH /agents/:id/metadata', method: 'PATCH', path: `/agents/${MISSING_ID}/metadata`, body: { wallet: '0xabc' }, ref: MISSING_ID },
+      { label: 'POST /agents/:id/model', method: 'POST', path: `/agents/${MISSING_ID}/model`, body: { model: 'claude-haiku-4-5-20251001' }, ref: MISSING_ID },
+      { label: 'POST /agents/:id/probe', method: 'POST', path: `/agents/${MISSING_ID}/probe`, body: {}, ref: MISSING_ID },
+      { label: 'DELETE /agents/:id', method: 'DELETE', path: `/agents/${MISSING_ID}`, ref: MISSING_ID },
+    ];
+
+    it.each(scopedLookups)('$label names the team', async ({ method, path: routePath, body, ref }) => {
+      await deploy();
+      const resp = await fetch(`${baseUrl}${routePath}`, {
+        method,
+        headers: adminHeaders(WRONG_TEAM),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      expect(resp.status).toBe(404);
+      const parsed = await resp.json() as { error: string };
+      expect(parsed.error).toContain(WRONG_TEAM);
+      expect(parsed.error).toContain(ref);
+    });
+
+    it('leaves the reserved-name guard bare — it searched no team', async () => {
+      await deploy();
+      const resp = await fetch(`${baseUrl}/agents/by-name/manager`, {
+        headers: adminHeaders(TEST_TEAM),
+      });
+      expect(resp.status).toBe(404);
+      // Rejected before any lookup, so the message must not claim a team scope.
+      expect((await resp.json() as { error: string }).error).not.toContain(TEST_TEAM);
+    });
+  });
+
   it('keeps /agents metadata, /catalog, and restap.json consistent after a profile edit', async () => {
     await deploy();
     const edited = { bio: 'Consistency bio.', handles: { ENS: 'profiledev.eth', x: '@edited' } };

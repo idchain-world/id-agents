@@ -957,6 +957,19 @@ export class AgentManagerDb {
     return this.db.agents.getByName(teamId, name);
   }
 
+  /**
+   * Body for a 404 when an agent lookup misses. Names the team that was
+   * actually searched: a bare "Agent not found" reads identically whether the
+   * name is wrong, the team is wrong, or the agent is gone, which sends
+   * operators hunting the name when the real cause is a caller that fell back
+   * to the default team. Discloses nothing new — the team name is the value
+   * the caller supplied (or the documented default).
+   */
+  private agentNotFound(ref: string, teamName: string, detail?: string): { error: string } {
+    const suffix = detail ? ` ${detail}` : '';
+    return { error: `Agent "${ref}" not found in team "${teamName}"${suffix}` };
+  }
+
   private async dbListAgents(teamId: string, includeAutomator: boolean = false): Promise<AgentRow[]> {
     return this.db.agents.list(teamId, includeAutomator);
   }
@@ -2695,19 +2708,21 @@ export class AgentManagerDb {
     // Get agent by name (most recent)
     // NOTE: Must be defined BEFORE /agents/:id to avoid "by-name" matching as an id
     this.managementApp.get('/agents/by-name/:name', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       if (req.params.name.toLowerCase() === 'manager') {
+        // Reserved-name guard, not a lookup miss — no team was searched, so
+        // this message must not claim one.
         return res.status(404).json({ error: 'Agent not found' });
       }
       const agent = await this.dbQueryAgentByNameMostRecent(teamId, req.params.name);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.name, teamName));
       res.json(this.agentToResponse(agent, { isAdmin: this.isAdminRequest(req) }));
     });
 
     this.managementApp.get('/agents/:id', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentById(teamId, req.params.id);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
       res.json(this.agentToResponse(agent, { isAdmin: this.isAdminRequest(req) }));
     });
 
@@ -3267,9 +3282,9 @@ export class AgentManagerDb {
     });
 
     this.managementApp.post('/agents/:id/metadata', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentById(teamId, req.params.id);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
 
       const { metadata } = req.body || {};
       const nextMetadata = metadata ? { ...(agent.metadata || {}), ...(metadata || {}) } : agent.metadata;
@@ -3298,9 +3313,9 @@ export class AgentManagerDb {
     });
 
     this.managementApp.post('/agents/by-name/:name/metadata', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentByNameMostRecent(teamId, req.params.name);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.name, teamName));
       const { metadata } = req.body || {};
       const nextMetadata = metadata ? { ...(agent.metadata || {}), ...(metadata || {}) } : agent.metadata;
 
@@ -3323,9 +3338,9 @@ export class AgentManagerDb {
     // persist them back to the team's last-deployed config YAML so they
     // survive restart and /sync (which re-applies the YAML floor).
     this.managementApp.post('/agents/by-name/:name/profile', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentByNameMostRecent(teamId, req.params.name);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.name, teamName));
 
       const body = (req.body || {}) as { bio?: unknown; handles?: unknown };
       if (body.bio === undefined && body.handles === undefined) {
@@ -3410,7 +3425,7 @@ export class AgentManagerDb {
       }
 
       const agent = await this.dbQueryAgentById(teamId, req.params.id);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
 
       if (agent.type !== 'claude') {
         return res.status(400).json({ error: 'Only local runtime-backed agents have models' });
@@ -3437,9 +3452,9 @@ export class AgentManagerDb {
     // POST /agents/:id/probe — ad-hoc heartbeat probe for remote-endpoint agents
     this.managementApp.post('/agents/:id/probe', async (req, res) => {
       try {
-        const { id: teamId } = await this.getTeam(req);
+        const { id: teamId, name: teamName } = await this.getTeam(req);
         const agent = await this.dbQueryAgentById(teamId, req.params.id);
-        if (!agent) return res.status(404).json({ error: 'Agent not found' });
+        if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
 
         if (!isRemoteEndpointRuntime(agent.runtime)) {
           return res.status(400).json({ error: 'probe_only_supported_for_remote' });
@@ -3448,7 +3463,7 @@ export class AgentManagerDb {
         await this.probeOneRemoteAgent(teamId, agent);
         // Re-fetch to get the updated values
         const updated = await this.dbQueryAgentById(teamId, agent.id);
-        if (!updated) return res.status(404).json({ error: 'Agent not found after probe' });
+        if (!updated) return res.status(404).json(this.agentNotFound(agent.id, teamName, '(after probe)'));
 
         const health = this.deriveRemoteHealth(updated);
         res.json({
@@ -3469,9 +3484,9 @@ export class AgentManagerDb {
     // PATCH /agents/:id/metadata — update agent properties (wallet, name, etc.)
     this.managementApp.patch('/agents/:id/metadata', async (req, res) => {
       try {
-        const { id: teamId } = await this.getTeam(req);
+        const { id: teamId, name: teamName } = await this.getTeam(req);
         const agent = await this.dbQueryAgentById(teamId, req.params.id);
-        if (!agent) return res.status(404).json({ error: 'Agent not found' });
+        if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
 
         const { wallet, name: newName } = req.body;
         const hasUpdates = wallet || newName;
@@ -3495,9 +3510,9 @@ export class AgentManagerDb {
     });
 
     this.managementApp.delete('/agents/:id', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentById(teamId, req.params.id);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.id, teamName));
 
       // Stop runtime server if running
       const serverKey = this.key(teamId, agent.id);
@@ -3530,9 +3545,9 @@ export class AgentManagerDb {
     });
 
     this.managementApp.delete('/agents/by-name/:name', async (req, res) => {
-      const { id: teamId } = await this.getTeam(req);
+      const { id: teamId, name: teamName } = await this.getTeam(req);
       const agent = await this.dbQueryAgentByNameMostRecent(teamId, req.params.name);
-      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+      if (!agent) return res.status(404).json(this.agentNotFound(req.params.name, teamName));
       const serverKey = this.key(teamId, agent.id);
       const server = this.runningServers.get(serverKey);
       if (server) {
