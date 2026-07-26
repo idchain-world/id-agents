@@ -75,7 +75,10 @@ describe('/deploy refusal contract (§4)', () => {
   function writeConfig(team: string, agentName = 'beta', extraDir?: string): string {
     const agentDir = extraDir ?? path.join(configDir, `${agentName}-workdir`);
     fs.mkdirSync(agentDir, { recursive: true });
-    const p = path.join(configDir, `${team}.yaml`);
+    // Filename keyed by AGENT, not team: two configs for the same team must be
+    // DIFFERENT files, or last_config_path is identical either way and cannot
+    // detect a check that ran after updateConfig.
+    const p = path.join(configDir, `${team}-${agentName}.yaml`);
     fs.writeFileSync(p, `version: "1"
 team: ${team}
 
@@ -186,9 +189,16 @@ agents:
     fs.rmSync(untouched, { recursive: true, force: true });
     expect(fs.existsSync(untouched)).toBe(false);
 
+    // last_config_path must also be untouched: updateConfig runs BEFORE the
+    // agent loop, so a check placed even slightly too late would rewrite it
+    // while still leaving the agent working directory alone.
+    const teamIdBefore = await db.teams.getOrCreateTeamId(TEAM);
+    const configBefore = await db.teams.getConfig(teamIdBefore);
+
     const { status } = await deploy(secondConfig);
     expect(status).toBe(409);
     expect(fs.existsSync(untouched)).toBe(false);
+    expect((await db.teams.getConfig(teamIdBefore)).last_config_path).toBe(configBefore.last_config_path);
 
     // And no agent named gamma was created anywhere.
     const teamId = await db.teams.getOrCreateTeamId(TEAM);
