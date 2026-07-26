@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.109-beta
+
+### Fixed — "Agent not found" now names the team it searched
+
+Agent lookups are team-scoped, but the 404 they raise on a miss said only `Agent not found`. That message reads identically whether the name is wrong, the team is wrong, or the agent is genuinely gone — so a caller that resolved against the wrong team was pointed at the name instead of the scope, which is the one thing that was actually wrong.
+
+This surfaced when the desktop Dashboard could not save an agent profile. It sent no team header, the manager fell back to team `default`, and every agent on every other team 404'd with a message that gave no hint why.
+
+Errors now read `Agent "cto" not found in team "default"`. Applied across all 11 team-scoped agent lookups, not just the one that was reported. The status code is unchanged and only the message differs. The team **name** is used rather than the id, since the id means nothing to an operator, and it discloses nothing new — it is the value the caller supplied or the documented default.
+
+One site deliberately keeps the bare message: the reserved-name guard on `GET /agents/by-name/manager` rejects before any database query, so no team was searched and claiming one would be false. A test pins the absence of a team name there.
+
+### Internal
+
+- Removed two dead test suites that were gated on the withdrawn `ID_CONTROL_API_KEY`, and corrected a stale default manager URL in the test helpers.
+
 ## 0.1.108-beta
 
 ### Fixed — disabling a heartbeat no longer deletes it
