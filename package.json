@@ -1,6 +1,6 @@
 {
   "name": "id-agents",
-  "version": "0.1.107-beta",
+  "version": "0.1.108-beta",
   "description": "Multi-agent orchestration platform with REST-AP interfaces",
   "type": "module",
   "main": "dist/index.js",
@@ -48,7 +48,7 @@
     "id-agents": "tsc 2>/dev/null; node dist/interactive-agent-cli.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "ID_CONTROL_API_KEY=${ID_CONTROL_API_KEY:?set ID_CONTROL_API_KEY to run external-manager integration tests} vitest run tests/integration/agent-capabilities.test.ts tests/integration/agent-lifecycle.test.ts tests/integration/agent-relay.test.ts tests/integration/external-client.test.ts tests/integration/remote-commands.test.ts tests/integration/api-key-auth.test.ts tests/integration/require-auth-config.test.ts tests/integration/sync-command.test.ts",
+    "test:e2e": "ID_CONTROL_API_KEY=${ID_CONTROL_API_KEY:?set ID_CONTROL_API_KEY to run external-manager integration tests} vitest run tests/integration/agent-capabilities.test.ts tests/integration/agent-lifecycle.test.ts tests/integration/agent-relay.test.ts tests/integration/external-client.test.ts tests/integration/remote-commands.test.ts tests/integration/sync-command.test.ts",
     "test:claude": "npm run build && node dist/test-claude-agent.js",
     "test:claude-client": "npm run build && node dist/examples/test-claude-client.js",
     "demo": "npm run build && node dist/examples/multi-agent-demo.js",

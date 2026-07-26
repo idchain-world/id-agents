@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.108-beta
+
+### Fixed — disabling a heartbeat no longer deletes it
+
+`/heartbeat disable` removed the agent's schedule outright, so the heartbeat vanished from `/schedule list` and from the Dashboard's Heartbeats view entirely. A disabled heartbeat is meant to remain visible and simply not fire, which is what the `active` flag and the view's grey idle dot already expressed. Disable now pauses the schedule (`setActive(false)`) and enable resumes it, so the row stays put and the scheduler, which only ever reads active definitions, skips it.
+
+Enable no longer has to re-read `HEARTBEAT.md` and re-seed the schedule, so re-enabling an agent whose file has since moved or been renamed now works instead of failing.
+
 ## 0.1.107-beta
 
 ### Improved — checkins guidance for dispatcher agents
