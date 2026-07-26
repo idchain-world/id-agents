@@ -28,7 +28,7 @@ import { resolveWithinRoots, spawnWorkdirRoots } from './lib/path-policy.js';
 import { type Db } from './db/db-service.js';
 import type { AgentRow, ScheduleDefinitionRow, TaskRow } from './db/types.js';
 import fetch from 'node-fetch';
-import type { AgentHandles, PluginConfig, DeployConfig, HeartbeatConfig, CalendarSpec, ScheduleDeliveryMode } from './config-parser.js';
+import type { AgentHandles, PluginConfig, DeployConfig, HeartbeatConfig, CalendarSpec, ScheduleDeliveryMode, OrgConfig } from './config-parser.js';
 import { PROFILE_BIO_MAX_LENGTH, validateAgentHandles } from './config-parser.js';
 import { writeProfileToConfig } from './lib/profile-config-write.js';
 import {
@@ -991,6 +991,33 @@ export class AgentManagerDb {
   private agentNotFound(ref: string, teamName: string, detail?: string): { error: string } {
     const suffix = detail ? ` ${detail}` : '';
     return { error: `Agent "${ref}" not found in team "${teamName}"${suffix}` };
+  }
+
+  /**
+   * The team's `org` block, for callers that do not have a parsed config.
+   *
+   * Deploy holds the parsed config when it needs `org`; spawn does not. Nothing
+   * ever writes `org` into the teams config row — the only two updateConfig
+   * calls write `last_config_path` and nothing else — so it is recovered by
+   * reading the config file the team recorded.
+   *
+   * Best-effort by design: a missing, moved or unparseable config yields no org
+   * context, exactly as deploy treats a failed generateAgentOrgContext. An
+   * agent must still spawn when its team's config file has been moved away.
+   */
+  private async loadTeamOrg(teamId: string): Promise<OrgConfig | undefined> {
+    try {
+      const teamConfig = await this.db.teams.getConfig(teamId);
+      // Honour a persisted value if one ever starts being written.
+      if (teamConfig.org) return teamConfig.org as OrgConfig;
+
+      const configPath = teamConfig.last_config_path;
+      if (typeof configPath !== 'string' || !configPath) return undefined;
+      const parsed = yaml.load(readFileSync(configPath, 'utf-8')) as { org?: OrgConfig };
+      return parsed?.org;
+    } catch {
+      return undefined;
+    }
   }
 
   private async dbListAgents(teamId: string, includeAutomator: boolean = false): Promise<AgentRow[]> {
@@ -2928,7 +2955,7 @@ export class AgentManagerDb {
         teamId = team.id;
         teamName = team.name;
 
-        const { name, type: agentType, model, runtime, allowedTools, pluginPath, plugins, skills, metadata: reqMetadata, local, agent, roleBody, heartbeat, openMode, workingDirectory: configWorkDir, verbose, dangerouslySkipPermissions, effort, domain, tokenId, address } = req.body || {};
+        const { name, type: agentType, model, runtime, allowedTools, pluginPath, plugins, skills, metadata: reqMetadata, local, agent, roleBody, heartbeat, openMode, workingDirectory: configWorkDir, verbose, dangerouslySkipPermissions, effort, domain, tokenId, address, wallet } = req.body || {};
         const agentOverlay = agent;
         if (!name) return res.status(400).json({ error: 'Missing name' });
         const agentNameCheck = validateName(name, 'agent');
@@ -3018,13 +3045,39 @@ export class AgentManagerDb {
           copyLibraryAgentOverlay(workingDirectory, agentOverlay, effectiveRuntime);
         }
 
+        // §6.2 PARITY STEP 1 — wallet. Deploy provisions on `wallet: true`;
+        // spawn did not, so an agent added to a live team had no wallet however
+        // the team was configured. Gated identically: only `true` calls the
+        // `ows` CLI.
+        const spawnWalletOptIn = wallet === true || wallet === 'true';
+        const owsWallet = spawnWalletOptIn
+          ? this.getOrCreateAgentWallet(teamName, name)
+          : null;
+
+        // §6.2 PARITY STEP 2 — org context. Deploy has the parsed config in
+        // hand; spawn does not, so it recovers the team's `org` block from the
+        // config file the team recorded.
+        const spawnOrg = await this.loadTeamOrg(teamId);
+        let spawnOrgContext = '';
+        if (spawnOrg?.groups) {
+          try {
+            const { generateAgentOrgContext } = await import('./org-chart.js');
+            spawnOrgContext = generateAgentOrgContext(name, spawnOrg);
+          } catch { /* org context is best-effort, exactly as in deploy */ }
+        }
+
         // 2. Deploy team-level skills (runtime-aware: .claude/skills/ or .agents/skills/)
-        if (skills && Array.isArray(skills) && skills.length > 0) {
-          this.deploySkillsToAgent(workingDirectory, skills, {
+        // Also runs when there are no skills but there IS org context, so the
+        // context is not silently dropped for a skill-less spawn — deploy always
+        // calls this, which is where the asymmetry came from.
+        if ((skills && Array.isArray(skills) && skills.length > 0) || spawnOrgContext) {
+          this.deploySkillsToAgent(workingDirectory, Array.isArray(skills) ? skills : [], {
             DISPLAY_NAME: domain || name,
             TEAM: teamName,
-            ORG_CONTEXT: '',
-          }, { hasWallet: false, runtime: effectiveRuntime });
+            ORG_CONTEXT: spawnOrgContext
+              ? `\n## Your Role\n\n${spawnOrgContext}\n\nSee the full org chart at the shared team folder for details on all groups.`
+              : '',
+          }, { hasWallet: !!owsWallet, runtime: effectiveRuntime });
         }
 
         // 3. Overlay working-directory template files (runtime-aware)
@@ -3074,7 +3127,11 @@ export class AgentManagerDb {
           ...(heartbeat && { heartbeat: true }),
           ...(openMode !== undefined && { openMode: openMode === true || openMode === 'true' }),
           ...(reasoningEffort && { effort: reasoningEffort }),
-          ...(dangerouslySkipPermissions !== undefined && { dangerouslySkipPermissions: dangerouslySkipPermissions === true || dangerouslySkipPermissions === 'true' })
+          ...(dangerouslySkipPermissions !== undefined && { dangerouslySkipPermissions: dangerouslySkipPermissions === true || dangerouslySkipPermissions === 'true' }),
+          // §6.2: record the explicit opt-in and the provisioned wallet, same
+          // shape deploy writes, so the wallet gate and export see one format.
+          ...(wallet !== undefined && { wallet: spawnWalletOptIn }),
+          ...(owsWallet && { ows_wallet: owsWallet.walletName, ows_address: owsWallet.address })
         };
 
         await this.db.agents.create({
