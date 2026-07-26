@@ -31,6 +31,7 @@ import fetch from 'node-fetch';
 import type { AgentHandles, PluginConfig, DeployConfig, HeartbeatConfig, CalendarSpec, ScheduleDeliveryMode, OrgConfig } from './config-parser.js';
 import { PROFILE_BIO_MAX_LENGTH, validateAgentHandles } from './config-parser.js';
 import { writeProfileToConfig } from './lib/profile-config-write.js';
+import { importAvatars } from './lib/import-avatars.js';
 import {
   exportTeamConfig,
   resolveExportPath,
@@ -4884,6 +4885,12 @@ export class AgentManagerDb {
     teamId: string,
     teamName: string,
     callerFrom?: string,
+    /**
+     * §7: `/import --team <name>` forces the target team, beating the file's
+     * own `team:` key. Threaded through rather than duplicated so import
+     * REUSES the deploy creation path instead of growing a second one.
+     */
+    teamOverride?: string,
   ): Promise<{ ok: boolean; result?: any; error?: string; httpStatus?: number; message?: string }> {
     // Remove leading slash if present
     const cmd = command.startsWith('/') ? command.slice(1) : command;
@@ -6239,6 +6246,55 @@ export class AgentManagerDb {
         };
       }
 
+      // §7 — /import <file> [--team <name>]. Creates a NEW team by reusing the
+      // deploy creation path verbatim, so the §4 refusal contract, org
+      // persistence and workdir containment come along rather than being
+      // reimplemented. The only import-specific work is the avatar mirror.
+      case 'import': {
+        const teamFlagIndex = args.indexOf('--team');
+        const overrideTeam = teamFlagIndex >= 0 ? args[teamFlagIndex + 1] : undefined;
+        if (teamFlagIndex >= 0 && !overrideTeam) {
+          return { ok: false, error: 'Usage: /import <file> [--team <name>]' };
+        }
+        const importArgs = args.filter((a, i) => i !== teamFlagIndex && i !== teamFlagIndex + 1);
+        const importFile = importArgs[0];
+        if (!importFile) {
+          return { ok: false, error: 'Usage: /import <file> [--team <name>]' };
+        }
+
+        const created = await this.executeRemoteCommand(
+          ['/deploy', ...importArgs].join(' '),
+          teamId,
+          teamName,
+          callerFrom,
+          overrideTeam,
+        );
+        // A refusal (409) or a config error propagates untouched — import must
+        // not soften the contract it inherited.
+        if (!created.ok) return created;
+
+        // §5.2.3 avatars. Never fatal: a team that will not import because a
+        // PNG is corrupt is a worse outcome than a team with no picture.
+        const importedTeam = created.result?.team || overrideTeam || teamName;
+        const importLookup = this.resolveConfigPath(
+          importFile.endsWith('.yaml') || importFile.endsWith('.yml') ? importFile : `${importFile}.yaml`,
+        );
+        const avatarWarnings = importLookup.resolved
+          ? importAvatars(
+              importedTeam,
+              (created.result?.agents || []).map((a: { name?: string }) => String(a?.name ?? '')),
+              path.join(path.dirname(importLookup.resolved), 'avatars'),
+              path.join(homedir(), '.id-agents', 'profiles'),
+              importLookup.resolved,
+            ).warnings
+          : [];
+
+        return {
+          ok: true,
+          result: { ...created.result, imported: true, warnings: [...(created.result?.warnings || []), ...avatarWarnings] },
+        };
+      }
+
       case 'deploy': {
         // Deploy agents from a config file
         // Usage: /deploy <config> [param1=value1] [param2=value2] ...
@@ -6310,7 +6366,7 @@ export class AgentManagerDb {
         // refusing on row-existence alone would reject every deploy, including
         // brand-new teams. An empty auto-created row is not a live team; a team
         // with agents in it is exactly what D1 protects.
-        const targetTeamName = configTeam || teamName;
+        const targetTeamName = teamOverride || configTeam || teamName;
         const existingTeam = await this.db.teams.getTeamByName(targetTeamName);
         if (existingTeam) {
           // listAll, not list(): a team holding only a register-created virtual
@@ -6329,13 +6385,13 @@ export class AgentManagerDb {
         // If config specifies a team, use that instead of the request's team
         let effectiveTeamId = teamId;
         let effectiveTeamName = teamName;
-        if (configTeam && configTeam !== teamName) {
-          effectiveTeamId = await this.db.teams.getOrCreateTeamId(configTeam);
-          effectiveTeamName = configTeam;
+        if (targetTeamName !== teamName) {
+          effectiveTeamId = await this.db.teams.getOrCreateTeamId(targetTeamName);
+          effectiveTeamName = targetTeamName;
           // Ensure team directory exists
-          const configTeamDir = `${this.baseWorkDir}/teams/${configTeam}`;
+          const configTeamDir = `${this.baseWorkDir}/teams/${targetTeamName}`;
           if (!existsSync(configTeamDir)) mkdirSync(configTeamDir, { recursive: true });
-          console.log(`[Deploy] Using team from config: ${configTeam}`);
+          console.log(`[Deploy] Using team: ${targetTeamName}`);
         }
 
         if (errors.length > 0) {
@@ -6460,6 +6516,8 @@ export class AgentManagerDb {
               // via the agent's /catalog endpoint. Runtime PATCH /catalog still
               // works; the next /deploy or /sync re-applies this YAML floor.
               ...(agentConfig.catalog && { catalog: agentConfig.catalog }),
+              // D10: an address identifier round-trips through metadata.
+              ...(agentConfig.agent_account && { agent_account: agentConfig.agent_account }),
               // Profile floor from YAML (bio/handles) — same semantics as catalog.
               ...(agentConfig.bio && { bio: agentConfig.bio }),
               ...(agentConfig.handles && { handles: agentConfig.handles })
@@ -6539,6 +6597,11 @@ export class AgentManagerDb {
               created_at: Date.now(),
               metadata,
               runtime: effectiveRuntime,
+              // D9: ENS identity round-trips through its own columns. Without
+              // these the export emitted tokenId/domain that nothing could
+              // restore.
+              token_id: agentConfig.tokenId ?? null,
+              domain: agentConfig.domain ?? null,
             });
 
             // All agents run locally - set up database and let CLI spawn the process

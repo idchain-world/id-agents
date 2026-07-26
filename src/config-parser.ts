@@ -98,6 +98,12 @@ export interface AgentSpec {
   heartbeatFile?: string;             // Path to heartbeat yaml config (relative to config file)
   heartbeat?: number | HeartbeatConfig;  // Number = new model (seconds, reads HEARTBEAT.md), object = legacy (interval+message)
   address?: string;                   // Ethereum address (links to .env.<name>.<address> file)
+  // Identity fields (D9/D10). Export emits these; without them declared here
+  // the parser drops them and an exported team cannot round-trip its ENS
+  // handle or its agent_account — export would be write-only.
+  tokenId?: string;                   // ENS token id / label, agents.token_id
+  domain?: string;                    // ENS domain, agents.domain
+  agent_account?: string;             // Ethereum address identifier (D10)
   wallet?: boolean;                   // Opt-in to OWS wallet provisioning at deploy/sync.
                                       // Default: false. When true the deploy/sync path
                                       // calls `ows wallet create` and writes
