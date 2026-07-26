@@ -27,7 +27,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 8. `src/claude-agent-server.ts` — Per-agent REST-AP Express app (`/talk`, `/news`, `/query`, files, schedule, optional XMTP); reply/agent broadcasts hoist `in_reply_to` and seed downstream `query_id` so `/talk-to` waiter routing and `/news?query_id=` lookups align with originating queries
 9. `src/claude-agent.ts` — Claude agent wrapper and entrypoint [STATUS: PASS] Curated env whitelist, bypassPermissions intentional, no shell execution
 10. `src/claude-restap-cli.ts` — Worker REST-AP CLI entrypoint
-11. `src/cli/agent-readiness.ts` — `waitForAgentReady`: polls a worker's `/.well-known/restap.json` with a deadline (default 8s timeout, 250ms interval, 750ms per-request) so an `/ask` immediately after `/sync` or `/deploy` does not race the listening port
+11. `src/cli/agent-readiness.ts` — `waitForAgentReady`: polls a worker's `/.well-known/restap.json` with a deadline (default 8s timeout, 250ms interval, 750ms per-request) so an `/ask` immediately after `/sync` or `/deploy` does not race the listening port [STATUS: PASS w/ residual] The function itself is clean: bounded outer deadline, per-request `AbortSignal.timeout`, no credentials sent, no response body read, errors swallowed by design, and the pre-sleep deadline check prevents overshoot. Residual is at the caller, not here — `probeNewAgentsReady` (`interactive-agent-cli.ts:4426`) derives the probe URL from `row.url || row.endpoint`, and `endpoint` is the unvalidated `POST /agents/register` field, so this is one more fetch site fanning off that known SSRF. Low severity in this path: blind GET, boolean-only outcome surfaced as a readiness warning, 8s bound. The other two call sites (4615, 4667) pass a literal `http://localhost:${port}` and are unaffected
 12. `src/cli/public-commands.ts` — Public-team agent CLI subcommands
 13. `src/cli/workspace-sync.ts` — Workspace and deploy sync utilities for the CLI
 14. `src/config-parser.ts` — YAML config parsing, parameter substitution, plugin resolution; team-level wallet opt-in / scope fields consumed by deploy + manager
@@ -38,7 +38,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 19. `src/core/index.ts` — Core re-exports
 20. `src/core/messaging-service.ts` — Message delivery, news items, query management
 21. `src/core/safe-compare.ts` — Timing-safe string compare for API keys
-22. `src/core/team-service.ts` — Team CRUD and port range allocation
+22. `src/core/team-service.ts` — Team CRUD and port range allocation [SEC: pass — dead code, same pattern as `file-service.ts`: only `core/index.ts` re-exports it, and the sole consumer of `core/index.js` (`interactive-agent-cli.ts`) imports just `findProjectRoot`/`readDotEnvFile`, not any team-service function. `deleteTeam`'s unsanitized `teamName` → `rmSync(teamDir, {recursive:true,force:true})` would be a path-traversal-to-recursive-delete if ever wired up, so flag before reachability changes.]
 23. `src/core/types.ts` — Shared TypeScript types
 24. `src/db.ts` — Backward-compatible re-exports to `db/` (`createDb`, `migrateDb`, `getOrCreateTeamId` legacy helper) [STATUS: PASS] Thin facade over modular DB layer; same migration safety as before
 25. `src/db/db-adapter.ts` — Abstract DB adapter and connection surface
@@ -136,7 +136,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 117. `src/tui/util/models.ts` — TUI model-name abbreviation: hand-edited `MODEL_ABBREVIATIONS` table (`claude-opus-4-6` → `opus-4-6`, `claude-sonnet-4-6` → `sonn-4-6`, `claude-haiku-4-5-20251001` → `haiku-4-5`, `composer-2` → `comp-2`, gpt entries pass-through, …) plus `abbrevModel(model)` lookup. Unknown models return the raw string and visibly overflow the 10-char `MODEL` column — that overflow is the prompt to add a new entry (heuristic fallback removed in v0.1.89-beta per `7a17ecd`)
 118. `src/tui/util/schedule.ts` — TUI: next-run and schedule string helpers
 119. `src/wakeup-service/event-producer.ts` — Topic emitters for `event_log`: tasks (`task:claimed`, `task:completed`), queries (`query:delivered`, `query:failed`, `query:expired`), checkins (`checkin:created`, `closed`, `snoozed`, `due`, `expired`). Includes a 280-byte message preview cap; producers do not swallow errors so an event-log failure surfaces alongside the lifecycle write
-120. `src/wakeup-service/retention.ts` — `event_log` per-team age/count retention sweep (default 7d / 100k rows, env overrides via `EVENT_LOG_RETENTION_DAYS` / `EVENT_LOG_RETENTION_COUNT`); 5-minute default cadence, wired at boot in `agent-manager-db.ts` (`startEventLogRetentionSweep`)
+120. `src/wakeup-service/retention.ts` — `event_log` per-team age/count retention sweep (default 7d / 100k rows, env overrides via `EVENT_LOG_RETENTION_DAYS` / `EVENT_LOG_RETENTION_COUNT`); 5-minute default cadence, wired at boot in `agent-manager-db.ts` (`startEventLogRetentionSweep`) [SEC: pass — every delete is team-scoped and fully parameterized in both repo dialects; env overrides fail open (oversized values keep data, never widen the delete); `pruneByCount` clamps negatives and early-returns on `excess <= 0`; start/stop lifecycle complete with reentrancy guard and caught tick errors. Residual: `pruneByAge` is a single unbatched `DELETE`, so a large post-outage backlog runs in one statement.]
 121. `src/xmtp/ows-signer.ts` — OWS-backed XMTP signer: delegates signing to OWS CLI
 122. `src/xmtp/xmtp-messaging.ts` — `XmtpMessaging` (EventEmitter), allowlist, inbound `startQuery`, ENS resolution
 
@@ -162,7 +162,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 14. `/public` and `/public *` subcommands — Public team agents (list, add via manager-join, remove, chat; optional OWS wallet provisioning at join) [STATUS: REVIEW] See code paths for network/remote surfaces
 15. `/heartbeat` / heartbeats & `/calendar` — List/add/manage scheduled pings and calendar prompts
 16. `/task create|list|assign|done|remove` — Manager task lifecycle
-17. `/sync <config> [params]` — Reconcile team with config (add/update/remove) via v3 `sync` engine
+17. `/sync <config> [params]` — REMOVED (SPEC §9.1/§9.2, D2). Retained only as a stub that answers with its replacements (`lib/sync-removed.ts`, matched at `interactive-agent-cli.ts:2342` both bare and with args). The database is the source of truth; a config may no longer overwrite it. Replacements: `/diff` for drift, `/export`/`/import` for config round-trip, `/model` and `/delete` for live change. Distinct from the `id-agents sync <config>` WORKSPACE CLI (`src/cli/workspace-sync.ts`) and `/sync-wallets`, both of which still exist
 18. `/status` — Manager/agent health summary
 19. `/update <agent> [--wallet] [--name]` — Update metadata
 20. `/wallet <agent> [chain]` — Show wallet
@@ -228,7 +228,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 6. `POST /talk-to` — A2A via manager [STATUS: PASS] Localhost / agent URL from manager, bounded max timeout
 7. `PATCH /identity` — Update agent identity [STATUS: PASS] Type and body-size checks; 10KB body cap
 8. `GET /files/list` — JSON file listing [STATUS: REVIEW] Merges `/tmp` and working directory; exposes all readable files under `/tmp` as in earlier audit
-9. `GET /files` — Browser navigation over file roots
+9. `GET /files` — Browser navigation over file roots [STATUS: REVIEW] Listing branch is a verbatim copy of D.8's walker (same `/tmp` + workdir recursive enumeration, same findings). Walker uses symlink-following `fs.statSync().isDirectory()` instead of `dirent.isDirectory()` and keeps no visited set, so a symlink cycle under `/tmp` recurses unbounded (verified: re-enumerates the same file at every cycle level) and a symlink to an out-of-root dir gets enumerated, then served by the `express.static('/tmp')` mount below. Local-only: server binds `127.0.0.1` (line ~2025)
 10. `POST /files/upload` — Upload to agent workspace (size limit) [STATUS: PASS] `path.basename` traversal protection; UTF-8; auth per local model
 11. `USE /files` — `express.static` (includes `/tmp` mount) [STATUS: REVIEW] Serves all of `/tmp` readably when mounted first
 12. `USE /files/teams` — Team shared `express.static` [STATUS: PASS] Index disabled; manager path
@@ -243,7 +243,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 1. `GET /.well-known/restap.json` — Catalog
 2. `POST /remote` — Remote `id-agents` commands for the CLI [STATUS: REVIEW] `apiKeyValidator` exists in module but is not always wired in the handler; confirm current behavior before relying on it
 3. `POST /talk` / `GET /news` / `POST /news` — CLI agent loop: talk + poll + ingest; `POST /news` [STATUS: PASS] Thorough noAutoReply/loop noise filtering; confirm pending-question path if you modify it
-4. `POST /schedule` — Queues internal schedule as pending work for the CLI user agent
+4. `POST /schedule` — Queues internal schedule as pending work for the CLI user agent [STATUS: PASS w/ residuals] Better validated than its worker twin (D.14): requires `message`, requires `schedule` to be a non-null object, and rejects any `mode` other than `"internal"`. No origin/auth check, but the server binds `127.0.0.1` (line 462) and the JSON body is capped at 10mb (line 55), so reach is local-only. Residuals, all pre-existing: (a) `this.pendingQueries.set()` at line 244 — the Map is never `.delete()`d anywhere in the file (only set/get/values), so every `/talk` and `/schedule` entry is permanent; `newsItems` by contrast IS swept. (b) `message` is truthiness-checked only — no `typeof`/length guard, so a non-string lands in `prompt`. (c) `schedule` passes any object (no `id`/`kind`/`title` shape check) and `linkedTasks` elements are unvalidated; both are stored verbatim into news `data`, which the agent later reads as context
 
 ---
 
@@ -280,8 +280,8 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 
 4. Sender allowlist tiers (trusted / open when empty / blocked when non-empty)
 5. OWS — Signing never in-process key material when using OWS signer
-6. MLS / identity verification for inbound
-7. `xmtp_` query prefix and `noAutoReply` isolation for loop prevention
+6. MLS / identity verification for inbound [STATUS: REVIEW] The documented human-in-the-loop approval layer is dead code. `approvalCallback` (`xmtp/xmtp-messaging.ts:71`, "This is where human-in-the-loop approval happens") is never assigned anywhere in `src/` — `startXmtp` (`claude-agent-server.ts:2063`) calls only `setMessageHandler`. Both guarded branches are therefore no-ops: inbound approval for non-trusted senders (line 441) and outbound reply approval (line 459). Under `openMode` with an empty allowlist `isSenderAllowed` returns true for any address (line 156) while `isSenderTrusted` returns false — exactly the case the approval gate was meant to backstop. Remaining inbound controls are the self-address echo check (line 414), the allowlist, and the prompt-level warning at `claude-agent-server.ts:2094`. Compounds with the caller-writable `openMode` metadata merge
+7. `xmtp_` query prefix and `noAutoReply` isolation for loop prevention [STATUS: REVIEW] Holds for the internal news/talk path only, not XMTP peer-to-peer. `startQuery(..., 'xmtp:<addr>', {noAutoReply:true})` (`claude-agent-server.ts:2124`) suppresses `sendReplyToSender`, but the XMTP reply travels a different path: the inbound handler's return value (line 2110) is sent unconditionally by `handleInbound` via `ctx.conversation.sendText(reply)` (`xmtp-messaging.ts:472`). `noAutoReply` never touches it. The only echo guard is sender==self (line 414), so two mutually-allowlisted (or both open-mode) agents ping-pong indefinitely — one LLM turn per hop, no depth counter, turn cap, or rate limit. Cost/DoS amplifier, not data exposure. Any fix belongs in `handleInbound` as a per-`conversationId` turn counter. Cosmetic: the `response.saved` news entry logs "not sent - triggered message" (line 1884), which is wrong for XMTP — the reply *is* sent
 
 ---
 
@@ -306,7 +306,7 @@ Updated: 2026-05-01 — systemreview heartbeat audit (commits since 2026-04-29: 
 
 ## J. Documentation (`docs/` + repo root)
 
-1. `docs/guides/sync-command.md` — Canonical v3 `/sync` semantics (reconcile vs deploy)
+1. `docs/guides/sync-command.md` — `/sync` is REMOVED; the doc is now the migration record (what it did, what replaced it) plus the "NOT REMOVED" note distinguishing the `id-agents sync` workspace CLI
 2. `docs/guides/tui.md` — Terminal dashboard usage
 3. `docs/guides/tasks.md` — Manager task lifecycle for operators
 4. `docs/guides/interactive-agent.md`, `docs/guides/news-feed.md`, `docs/guides/heartbeats.md`, `docs/guides/agent-outputs.md` — CLI/TUI feature guides
