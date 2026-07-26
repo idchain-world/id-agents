@@ -165,7 +165,7 @@ Then deploy and talk to the team:
 
 See [QUICKSTART Step 4](./QUICKSTART.md) for the full detection commands.
 
-To update a running team later (add/remove/change agents without losing sessions), use [`/sync`](docs/guides/sync-command.md) instead of `/deploy`.
+`/deploy` is create-only: it refuses a team that already holds agents. To change a running team, use the surgical commands — `/model <agent> <model>` to change a model, `/delete <agent>` to remove one — and `/diff <team> <config>` to inspect drift without changing anything. [`/sync` is REMOVED](docs/guides/sync-command.md); the database is the source of truth and a config file may no longer overwrite it. Use `/export <team> [path]` to write a config back out from the database.
 
 ### Connecting a Manager
 
@@ -300,8 +300,11 @@ See [Scheduling Plan](./docs/SCHEDULING_PLAN.md) for the full design.
 /delete <agent>             # Delete agent
 /delete *                   # Delete all agents in current team
 /delete --team <name>       # Delete all agents in specified team
-/deploy <config>            # Deploy agents from config (clean/first-time)
-/sync <config>              # Reconcile running team with config (preserves sessions)
+/deploy <config>            # Create a NEW team from config (refuses an existing one)
+/export <team> [path]       # Write a config out from the database
+/import <file> [--team]     # Create a new team from a config file
+/diff <team> <config>       # Report drift between database and config (read-only)
+/sync <config>              # REMOVED — see /diff, /export, /import
 /output <agent>             # List files in agent's output directory
 /artifact <agent> <path>    # Read a file from agent's output directory
 /help                       # Show help
@@ -325,7 +328,7 @@ See [Scheduling Plan](./docs/SCHEDULING_PLAN.md) for the full design.
 
 ## Remote API
 
-The Manager exposes a `/remote` endpoint (no authentication required — localhost only) that lets any external tool — including another Claude Code session — interact with your agent team programmatically. This is how you manage agents from outside the interactive CLI. Deploy and sync commands (`/deploy`, `/sync`) also work via `/remote`.
+The Manager exposes a `/remote` endpoint (no authentication required — localhost only) that lets any external tool — including another Claude Code session — interact with your agent team programmatically. This is how you manage agents from outside the interactive CLI. Team commands (`/deploy`, `/export`, `/import`, `/diff`) also work via `/remote`.
 
 **From a terminal or script:**
 
@@ -362,8 +365,11 @@ This means any Claude Code instance on the same machine can coordinate with your
 - `/delete <name>` - Delete agent
 - `/delete *` - Delete all agents in current team
 - `/delete --team <name>` - Delete all agents in specified team
-- `/deploy <config>` - Deploy agents from YAML config (clean/first-time)
-- `/sync <config>` - [Reconcile running team with config](docs/guides/sync-command.md) (preserves sessions)
+- `/deploy <config>` - Create a NEW team from a YAML config (refuses a team that already holds agents)
+- `/export <team> [path]` - Write a config out from the database
+- `/import <file> [--team]` - Create a new team from a config file
+- `/diff <team> <config>` - Report drift between the database and a config (read-only)
+- `/sync <config>` - [REMOVED](docs/guides/sync-command.md) — use `/diff`, `/export`, `/import`
 - `/news [-l] <name>` - Check recent messages
 - `/output <name>` - List files in agent's output directory
 - `/artifact <name> <path>` - Read a file from agent's output directory
@@ -659,7 +665,7 @@ agents:
 
 Standalone skills live at `configs/skills/<name>/SKILL.md`. Library root is `<cwd>/configs` by default; override with `ID_LIBRARY_ROOT` to point at any clone of [public-agents](https://github.com/idchain-world/public-agents).
 
-Deploy is **additive-only and receipt-driven**: Step A copies the agent entry, Step B overlays `skills:` on top, and any file whose on-disk SHA does not match what we last wrote is treated as user-owned and skipped. A workspace receipt at `.id-agents/receipt.json` is the ownership ledger for `/sync`, re-sync, and `unsync` (undeploy). Re-running `/sync` against an unchanged team YAML and unchanged library is intended to be a true no-op: unchanged agents stay in the `unchanged` bucket and do not rebuild just because `skills:` was re-evaluated. See the [/sync guide](docs/guides/sync-command.md) for the full 4-case ownership rule, per-harness mapping, and memory-file fallback.
+Deploy is **additive-only and receipt-driven**: Step A copies the agent entry, Step B overlays `skills:` on top, and any file whose on-disk SHA does not match what we last wrote is treated as user-owned and skipped. A workspace receipt at `.id-agents/receipt.json` is the ownership ledger for the `id-agents sync` WORKSPACE CLI — a separate command from the removed `/sync` slash command, and one that still exists. Re-running `id-agents sync` against an unchanged team YAML and unchanged library is intended to be a true no-op: unchanged agents stay in the `unchanged` bucket and do not rebuild just because `skills:` was re-evaluated. See the [sync-command guide](docs/guides/sync-command.md) for the full 4-case ownership rule, per-harness mapping, and memory-file fallback.
 
 The TUI ships a read-only library browser for `configs/agents/` and `configs/skills/` (`npm run tui:dev`).
 
@@ -719,14 +725,14 @@ See [`NOTICE`](./NOTICE) for upstream attributions and per-skill license posture
 
 ### Standalone CLI
 
-In addition to the `/sync` and `/deploy` commands inside the interactive CLI, the library deploy pipeline is exposed as a one-shot CLI for non-interactive use:
+In addition to the `/deploy` command inside the interactive CLI, the library deploy pipeline is exposed as a one-shot CLI for non-interactive use. Note that `id-agents sync` below is this WORKSPACE CLI — a different command from the removed `/sync` slash command, and not removed:
 
 ```bash
 id-agents sync <config> [--workspace <path>]      # deploy agent + skills into a workspace
 id-agents unsync <config> [--workspace <path>]    # remove managed files using the receipt
 ```
 
-`sync` is additive and receipt-driven: any file the user owns or has edited is left untouched. `unsync` reverses only the files we wrote. See [/sync guide](./docs/guides/sync-command.md) for the 4-case ownership rule, the per-runtime mapping, and the memory-file fallback.
+`id-agents sync` is additive and receipt-driven: any file the user owns or has edited is left untouched. `id-agents unsync` reverses only the files we wrote. See the [sync-command guide](./docs/guides/sync-command.md) for the 4-case ownership rule, the per-runtime mapping, and the memory-file fallback.
 
 ### TUI library browsers
 
@@ -737,7 +743,7 @@ Press `l` for the agents library and `s` for the skills library from any TUI top
 If [OWS](https://github.com/open-wallet-standard/core) (Open Wallet Standard) is installed, agents can opt in to a multi-chain wallet. Wallets are encrypted in the OWS vault at `~/.ows/`.
 
 **How wallets are provisioned:**
-1. Opt in per agent (or under `defaults`) with `wallet: true` in the YAML config — the manager creates an OWS wallet for the agent at deploy/sync time
+1. Opt in per agent (or under `defaults`) with `wallet: true` in the YAML config — the manager creates an OWS wallet for the agent at create time (deploy, import or spawn)
 2. Or provision on demand for a running agent: `/agent <name> wallet provision`
 3. A `wallet` skill is deployed so the agent knows its own addresses
 
