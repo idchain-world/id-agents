@@ -43,8 +43,13 @@ import { SqliteTasksRepo } from '../../src/db/repos/sqlite/tasks-repo.js';
 import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
 import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
-import { classifyMetadataKey, listClassifiedMetadataKeys } from '../../src/lib/metadata-taxonomy.js';
-import { isGeneratedWorkdir } from '../../src/lib/export-team-config.js';
+import {
+  classifyAgentColumn,
+  classifyMetadataKey,
+  listClassifiedColumns,
+  listClassifiedMetadataKeys,
+} from '../../src/lib/metadata-taxonomy.js';
+import { COLUMN_CONFIG_KEY, isGeneratedWorkdir } from '../../src/lib/export-team-config.js';
 import { permitTmpWorkdirs } from '../helpers/permit-tmp-workdirs.js';
 
 async function createInMemoryDb() {
@@ -121,6 +126,49 @@ const EXCEPTIONS: Record<string, string> = {
   isAutomator: 'derived from type: automator rather than carried as a value',
 };
 
+/**
+ * COLUMNS (#3a468099). The guard above covers metadata keys only — it imports
+ * `listClassifiedMetadataKeys` and never `listClassifiedColumns`, which exists.
+ * So the nine `config`/`identifier` COLUMNS that actually reach the exported
+ * file sat outside it, and two of them (`token_id`, `domain`) ARE D9: the guard
+ * built to catch the fifth instance of the class did not cover the fields of
+ * the second.
+ *
+ * Keyed by COLUMN name. The exported file uses the CONFIG key
+ * (`working_directory` -> `workingDirectory`, `token_id` -> `tokenId`), and the
+ * restored value is read back off the ROW, not out of metadata.
+ */
+const COLUMN_FIXTURE_VALUES: Record<string, unknown> = {
+  name: 'roundtrip',
+  type: 'claude',
+  model: 'claude-haiku-4-5-20251001',
+  runtime: 'claude-code-cli',
+  working_directory: undefined,   // set per-run: the temp dir; see the exception
+  token_id: '4242',               // D9
+  domain: 'roundtrip.eth',        // D9
+  customer_domain: undefined,     // see COLUMN_EXCEPTIONS
+  public_endpoint_url: undefined, // see COLUMN_EXCEPTIONS
+};
+
+/**
+ * Column exceptions, enforced in BOTH directions exactly like the metadata list
+ * above: a stale entry fails, and an entry that starts surviving fails.
+ */
+const COLUMN_EXCEPTIONS: Record<string, string> = {
+  working_directory:
+    'GENERATED paths only (#f37ad05d): export emits <baseWorkDir>/agents/<id> as a COMMENT and omits '
+    + 'the key, so a restored agent gets a fresh directory instead of a pointer into the original\'s '
+    + 'live one. An AUTHORED path is NOT excepted and must round-trip untouched — that is the '
+    + 'load-bearing assertion below, protecting the 42 authored paths on the live fleet.',
+  customer_domain:
+    'KNOWN DEFECT, not a legitimate non-round-trip: classified `config` and exported, but absent from '
+    + 'AgentSpec, so the parser drops it and the deploy create-path never sets it. Write-only export — '
+    + 'the same class as org, D9, D10 and the DMZ keys. Proven by the dedicated test below.',
+  public_endpoint_url:
+    'KNOWN DEFECT, as customer_domain: exported, undeclared in AgentSpec, dropped on import. A restored '
+    + 'public-agent-remote agent loses the endpoint that makes it reachable.',
+};
+
 const TEAM = 'rt-src';
 const NEW_TEAM = 'rt-dst';
 
@@ -136,6 +184,16 @@ describe('every config-classified key survives export -> import', () => {
   let configDir: string;
 
   const configKeys = () => listClassifiedMetadataKeys().filter((k) => classifyMetadataKey(k) === 'config');
+  /** The columns that actually reach the exported file (#3a468099). */
+  const configColumns = () => listClassifiedColumns().filter((c) => {
+    const klass = classifyAgentColumn(c);
+    return klass === 'config' || klass === 'identifier';
+  });
+  /** Fixture values with the per-run working directory filled in. */
+  const columnValues = (): Record<string, unknown> => ({
+    ...COLUMN_FIXTURE_VALUES,
+    working_directory: path.join(configDir, 'rt-wd'),
+  });
 
   beforeEach(async () => {
     const port = await findFreePort();
@@ -178,12 +236,20 @@ describe('every config-classified key survives export -> import', () => {
   function writeFixtureConfig(): string {
     const agentDir = path.join(configDir, 'rt-wd');
     fs.mkdirSync(agentDir, { recursive: true });
-    const entry: Record<string, unknown> = { name: 'roundtrip', workingDirectory: agentDir, model: 'claude-haiku-4-5-20251001' };
+    const entry: Record<string, unknown> = {};
+    // COLUMNS first (#3a468099), written under their CONFIG key name.
+    const columns = columnValues();
+    for (const column of configColumns()) {
+      const value = columns[column];
+      if (value === undefined) continue;
+      entry[COLUMN_CONFIG_KEY[column] || column] = value;
+    }
     for (const key of configKeys()) {
       const value = FIXTURE_VALUES[key];
       if (value === undefined) continue;
       entry[key === 'allowed_tools' ? 'allowedTools' : key] = value;
     }
+    void agentDir;
     const p = path.join(configDir, 'fixture.yaml');
     fs.writeFileSync(p, yaml.dump({ version: '1', team: TEAM, agents: [entry] }, { noRefs: true }));
     return p;
@@ -199,6 +265,93 @@ describe('every config-classified key survives export -> import', () => {
   it('every exception is a real config key — the list cannot drift', () => {
     const stale = Object.keys(EXCEPTIONS).filter((k) => !configKeys().includes(k));
     expect(stale).toEqual([]);
+  });
+
+  // ---- COLUMNS (#3a468099) ----
+
+  it('covers the columns that actually reach the file, not just metadata keys', () => {
+    // The gap this task closed: nine config/identifier COLUMNS are exported,
+    // and the guard iterated metadata keys only.
+    expect(configColumns().sort()).toEqual([
+      'customer_domain', 'domain', 'model', 'name', 'public_endpoint_url',
+      'runtime', 'token_id', 'type', 'working_directory',
+    ]);
+  });
+
+  it('has a fixture value for every exported column, or a documented exception', () => {
+    const uncovered = configColumns().filter(
+      (c) => columnValues()[c] === undefined && !(c in COLUMN_EXCEPTIONS),
+    );
+    expect(uncovered).toEqual([]);
+  });
+
+  it('every column exception is a real exported column — the list cannot drift', () => {
+    const stale = Object.keys(COLUMN_EXCEPTIONS).filter((c) => !configColumns().includes(c));
+    expect(stale).toEqual([]);
+  });
+
+  it('round-trips every exported COLUMN through export -> import', async () => {
+    expect((await run(`/deploy ${writeFixtureConfig()}`)).body.ok).toBe(true);
+    const exported = path.join(configDir, 'columns.yaml');
+    expect((await run(`/export ${TEAM} ${exported}`)).body.ok).toBe(true);
+    expect((await run(`/import ${exported} --team ${NEW_TEAM}`)).body.ok).toBe(true);
+
+    const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
+    const row = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'roundtrip');
+    expect(row).toBeTruthy();
+
+    const columns = columnValues();
+    const lost: string[] = [];
+    for (const column of configColumns()) {
+      if (column in COLUMN_EXCEPTIONS) continue;
+      if (columns[column] === undefined) continue;
+      // token_id and domain are D9 — the fields of the SECOND instance of the
+      // class, until now guarded only by one assertion in another file.
+      if (JSON.stringify((row as any)[column]) !== JSON.stringify(columns[column])) {
+        lost.push(`${column}: expected ${JSON.stringify(columns[column])}, got ${JSON.stringify((row as any)[column])}`);
+      }
+    }
+    expect(lost).toEqual([]);
+  });
+
+  /**
+   * THE LOAD-BEARING ASSERTION. `working_directory` is excepted for GENERATED
+   * paths only. An authored path must survive untouched — 42 of the 46 live
+   * agents have one, and wrongly excepting the column would restore every one
+   * of them into an empty scratch directory.
+   */
+  it('an AUTHORED working_directory is NOT excepted — it round-trips untouched', async () => {
+    expect((await run(`/deploy ${writeFixtureConfig()}`)).body.ok).toBe(true);
+    const exported = path.join(configDir, 'authored-col.yaml');
+    await run(`/export ${TEAM} ${exported}`);
+    await run(`/import ${exported} --team ${NEW_TEAM}`);
+
+    const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
+    const row = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'roundtrip')!;
+    expect(row.working_directory).toBe(path.join(configDir, 'rt-wd'));
+    // And the file carried it as a VALUE, with no omission comment.
+    const text = fs.readFileSync(exported, 'utf8');
+    expect(text).toContain(path.join(configDir, 'rt-wd'));
+    expect(text).not.toContain('generated by the deployer');
+  });
+
+  it('a column exception that starts surviving must be removed from the list', async () => {
+    expect((await run(`/deploy ${writeFixtureConfig()}`)).body.ok).toBe(true);
+    const exported = path.join(configDir, 'col-exc.yaml');
+    await run(`/export ${TEAM} ${exported}`);
+    await run(`/import ${exported} --team ${NEW_TEAM}`);
+
+    const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
+    const row = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'roundtrip')!;
+    const columns = columnValues();
+
+    const nowSurviving = Object.keys(COLUMN_EXCEPTIONS).filter(
+      (c) => columns[c] !== undefined && JSON.stringify((row as any)[c]) === JSON.stringify(columns[c]),
+    );
+    // working_directory has a fixture value and IS excepted — but the exception
+    // is scoped to generated paths, and this fixture is authored, so it
+    // legitimately survives. Excluded explicitly rather than by omission.
+    expect(nowSurviving).toEqual(['working_directory']);
   });
 
   /**
@@ -274,6 +427,58 @@ describe('every config-classified key survives export -> import', () => {
       (k) => FIXTURE_VALUES[k] !== undefined && JSON.stringify(meta[k]) === JSON.stringify(FIXTURE_VALUES[k]),
     );
     expect(nowSurviving).toEqual([]);
+  });
+
+  /**
+   * INSTANCE #5 OF THE CLASS, found by extending the guard to columns and
+   * PROVEN here rather than asserted in a comment.
+   *
+   * `customer_domain` and `public_endpoint_url` are classified `config` and are
+   * written into the exported file, but neither is declared in `AgentSpec`, so
+   * `parseTeamConfig` drops them and the deploy create-path never sets them.
+   * Export is write-only for both: a public-agent-remote agent restored from a
+   * config comes back with no endpoint and no customer domain — unreachable.
+   *
+   * Exactly the shape of org, D9, D10 and the DMZ posture keys. The fix belongs
+   * in AgentSpec and the deploy create-path, which is code, not this test-only
+   * gate — filed rather than smuggled in here.
+   *
+   * WHEN THIS TEST FAILS, THE DEFECT HAS BEEN FIXED: delete it and remove both
+   * entries from COLUMN_EXCEPTIONS. It pins a bug on purpose, so it must not be
+   * allowed to keep passing quietly once the bug is gone.
+   */
+  it('PINS A DEFECT: customer_domain and public_endpoint_url are write-only exports', async () => {
+    // Seed a register-shaped row directly: no config file can produce one.
+    const teamId = await db.teams.getOrCreateTeamId(TEAM);
+    await db.agents.create({
+      team_id: teamId,
+      id: 'agent_remote_1',
+      name: 'remote-one',
+      type: 'claude',
+      model: 'claude-haiku-4-5-20251001',
+      status: 'running',
+      created_at: 1700000000,
+      runtime: 'public-agent-remote',
+      customer_domain: 'customer.example.com',
+      public_endpoint_url: 'https://agent.example.com',
+    } as any);
+
+    const exported = path.join(configDir, 'remote.yaml');
+    expect((await run(`/export ${TEAM} ${exported}`)).body.ok).toBe(true);
+
+    // The export side is fine — both fields are written out.
+    const text = fs.readFileSync(exported, 'utf8');
+    expect(text).toContain('customer.example.com');
+    expect(text).toContain('https://agent.example.com');
+
+    expect((await run(`/import ${exported} --team ${NEW_TEAM}`)).body.ok).toBe(true);
+    const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
+    const restored = (await db.agents.listAll(newTeamId)).find((r) => r.name === 'remote-one');
+    expect(restored).toBeTruthy();
+
+    // ...and the import side loses both. This is the defect, not the contract.
+    expect(restored!.customer_domain ?? null).toBeNull();
+    expect(restored!.public_endpoint_url ?? null).toBeNull();
   });
 
   it('mesh_member: false survives — a DMZ agent does not re-import mesh-reachable', async () => {
