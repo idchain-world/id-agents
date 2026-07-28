@@ -4970,6 +4970,12 @@ export class AgentManagerDb {
               name: a.name,
               id: a.id,
               type: a.type,
+              // `type` is the agent KIND (claude/virtual/interactive), not the
+              // harness — a Codex agent is still type 'claude'. Clients need
+              // `runtime` to show what actually executes the agent, and
+              // `effort` to show the reasoning level it was spawned with.
+              runtime: a.runtime,
+              ...(a.metadata?.effort !== undefined && { effort: a.metadata.effort }),
               status: a.status,
               model: a.model,
               port: a.port,
