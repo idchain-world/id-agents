@@ -6954,6 +6954,10 @@ export class AgentManagerDb {
               return { ok: false, error: `Invalid runtime "${runtime}". Valid: ${HARNESS_TYPES.join(', ')}` };
             }
             newRuntime = runtime;
+            // Runtime is denormalized: the agents row drives spawning, but a
+            // copy in metadata is what dashboards read. Write both or the UI
+            // keeps reporting the old harness for a correctly-switched agent.
+            newMetadata.runtime = runtime;
             restartRequired = true;
             updates.push(`runtime → ${runtime}`);
             i++;
