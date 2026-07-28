@@ -423,6 +423,7 @@ export class SqliteAgentsRepo implements AgentsRepository {
       endpoint?: string;
       metadata?: Record<string, unknown>;
       model?: string;
+      runtime?: string;
     },
   ): Promise<void> {
     const sets: string[] = ['status = ?'];
@@ -443,6 +444,10 @@ export class SqliteAgentsRepo implements AgentsRepository {
     if (extra?.model !== undefined) {
       sets.push('model = ?');
       params.push(extra.model);
+    }
+    if (extra?.runtime !== undefined) {
+      sets.push('runtime = ?');
+      params.push(extra.runtime);
     }
 
     params.push(agentId);

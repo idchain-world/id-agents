@@ -15,6 +15,19 @@ export function isCodexReasoningEffort(value: unknown): value is CodexReasoningE
   return typeof value === 'string' && (CODEX_REASONING_EFFORTS as readonly string[]).includes(value);
 }
 
+export const HARNESS_TYPES = [
+  'claude-agent-sdk',
+  'claude-code-cli',
+  'claude-code-local',
+  'codex',
+  'cursor-cli',
+  'public-agent-remote',
+] as const;
+
+export function isHarnessType(value: unknown): value is HarnessType {
+  return typeof value === 'string' && (HARNESS_TYPES as readonly string[]).includes(value);
+}
+
 export interface PluginConfig {
   name: string;
   path: string;

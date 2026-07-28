@@ -380,6 +380,7 @@ export class PgAgentsRepo implements AgentsRepository {
       endpoint?: string;
       metadata?: Record<string, unknown>;
       model?: string;
+      runtime?: string;
     },
   ): Promise<void> {
     if (!extra || Object.keys(extra).length === 0) {
@@ -410,6 +411,10 @@ export class PgAgentsRepo implements AgentsRepository {
     if (extra.model !== undefined) {
       setClauses.push(`model = $${idx++}`);
       params.push(extra.model);
+    }
+    if (extra.runtime !== undefined) {
+      setClauses.push(`runtime = $${idx++}`);
+      params.push(extra.runtime);
     }
 
     await this.db.query(

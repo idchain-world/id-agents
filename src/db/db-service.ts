@@ -187,7 +187,7 @@ export interface AgentsRepository {
 
   /**
    * Update agent status, with optional extra column updates
-   * (port, endpoint, metadata, model).
+   * (port, endpoint, metadata, model, runtime).
    */
   updateStatus(
     agentId: string,
@@ -197,6 +197,7 @@ export interface AgentsRepository {
       endpoint?: string;
       metadata?: Record<string, unknown>;
       model?: string;
+      runtime?: string;
     },
   ): Promise<void>;
 

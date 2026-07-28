@@ -98,7 +98,7 @@ import { closeLinkedCheckinsForTerminalTask } from './checkins/checkin-autoclose
 import type { CheckinRow } from './db/types.js';
 import { parseAgentRef, normalizeAlias, buildAmbiguityWarning, type AgentMatch } from './core/agent-identifier.js';
 import { resolveNewsTrigger } from './core/messaging-service.js';
-import { isCodexReasoningEffort, type CodexReasoningEffort, type HarnessType } from './harness/types.js';
+import { isCodexReasoningEffort, isHarnessType, CODEX_REASONING_EFFORTS, HARNESS_TYPES, type CodexReasoningEffort, type HarnessType } from './harness/types.js';
 import { SchedulerService, synthesizeForceHeartbeat } from './scheduling/scheduler-service.js';
 import type { DispatchTarget } from './scheduling/schedule-types.js';
 import { heartbeatToSchedule, heartbeatScheduleId, calendarToSchedule, validateIntervalSeconds, HEARTBEAT_GENERIC_MESSAGE } from './scheduling/schedule-config.js';
@@ -6905,10 +6905,10 @@ export class AgentManagerDb {
       }
 
       case 'update': {
-        // /update <agent> --wallet <address> --name <newname>
+        // /update <agent> --wallet <address> --name <newname> --runtime <harness> --effort <level>
         const agentName = args[0];
         if (!agentName) {
-          return { ok: false, error: 'Usage: /update <agent> [--wallet <address>] [--name <newname>]' };
+          return { ok: false, error: 'Usage: /update <agent> [--wallet <address>] [--name <newname>] [--runtime <harness>] [--effort <low|medium|high|xhigh>]' };
         }
 
         const matches = await this.dbResolveAgents(teamId, agentName);
@@ -6921,8 +6921,13 @@ export class AgentManagerDb {
         const agent = matches[0];
         const updates: string[] = [];
         const newMetadata = { ...agent.metadata };
+        // Column-level changes (as opposed to metadata) are applied via
+        // updateStatus, which also marks a running agent for restart — the
+        // harness and its flags are only read when the process is spawned.
+        let newRuntime: HarnessType | undefined;
+        let restartRequired = false;
 
-        // Parse --wallet and --name flags
+        // Parse --wallet, --name, --runtime and --effort flags
         for (let i = 1; i < args.length; i++) {
           if (args[i] === '--wallet' && args[i + 1]) {
             const walletAddr = args[i + 1];
@@ -6937,16 +6942,51 @@ export class AgentManagerDb {
             newMetadata.alias = newMetadata.alias || agent.name;
             updates.push(`name → ${newName}`);
             i++;
+          } else if (args[i] === '--runtime' && args[i + 1]) {
+            const runtime = args[i + 1];
+            if (!isHarnessType(runtime)) {
+              return { ok: false, error: `Invalid runtime "${runtime}". Valid: ${HARNESS_TYPES.join(', ')}` };
+            }
+            newRuntime = runtime;
+            restartRequired = true;
+            updates.push(`runtime → ${runtime}`);
+            i++;
+          } else if (args[i] === '--effort' && args[i + 1]) {
+            const effort = args[i + 1];
+            if (!isCodexReasoningEffort(effort)) {
+              return { ok: false, error: `Invalid effort "${effort}". Valid: ${CODEX_REASONING_EFFORTS.join(', ')}` };
+            }
+            newMetadata.effort = effort;
+            restartRequired = true;
+            updates.push(`effort → ${effort}`);
+            i++;
           }
         }
 
         if (updates.length === 0) {
-          return { ok: false, error: 'Nothing to update. Use --wallet <address> or --name <newname>' };
+          return { ok: false, error: 'Nothing to update. Use --wallet <address>, --name <newname>, --runtime <harness>, or --effort <low|medium|high|xhigh>' };
         }
 
         await this.db.agents.updateMetadata(agent.id, newMetadata);
 
-        return { ok: true, result: { message: `Updated ${agent.name}: ${updates.join(', ')}` } };
+        // Runtime lives on the agents row, not in metadata. Mark a running
+        // agent pending so the next rebuild spawns it under the new harness.
+        const willRestart = restartRequired && agent.status === 'running';
+        if (newRuntime !== undefined || willRestart) {
+          await this.db.agents.updateStatus(
+            agent.id,
+            willRestart ? 'pending' : agent.status,
+            newRuntime !== undefined ? { runtime: newRuntime } : undefined,
+          );
+        }
+
+        return {
+          ok: true,
+          result: {
+            message: `Updated ${agent.name}: ${updates.join(', ')}`,
+            ...(willRestart && { restart: 'Agent marked for restart.' })
+          }
+        };
       }
 
       case 'task': {
