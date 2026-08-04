@@ -41,6 +41,18 @@ export class SqliteAdapter implements DbAdapter {
     this.db.exec(sql);
   }
 
+  async transaction<T>(callback: (tx: DbAdapter) => Promise<T>): Promise<T> {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = await callback(this);
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   async close(): Promise<void> {
     this.db.close();
     return Promise.resolve();

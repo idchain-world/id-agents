@@ -32,6 +32,8 @@ import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 import { importAvatars } from '../../src/lib/import-avatars.js';
 import { MAX_AVATAR_BYTES } from '../../src/lib/export-team-config.js';
 import { permitTmpWorkdirs } from '../helpers/permit-tmp-workdirs.js';
+import { NormalizedOrgStore } from '../../src/org/normalized-org.js';
+import { generateAgentOrgContext } from '../../src/org-chart.js';
 
 async function createInMemoryDb() {
   const adapter = new SqliteAdapter(':memory:');
@@ -87,6 +89,12 @@ org:
     engineering:
       description: "Builds the thing"
       members: [${agentName}]
+      groups:
+        platform:
+          description: "Runs the thing"
+          lead: ${agentName}
+  tags:
+    builders: [${agentName}]
 `
       : '';
     const p = path.join(configDir, `${team}.yaml`);
@@ -180,19 +188,36 @@ agents:
       expect((dst!.metadata as any).ows_address).toBeUndefined();
     });
 
-    it('lands the org block on the NEW team ROW, not just in the file', async () => {
-      // This is the requirement that stops import re-creating the bug 6b fixed.
+    it('normalizes new deploy/import orgs and renders nested state from DB authority', async () => {
       expect((await run(`/deploy ${writeConfig(SOURCE_TEAM, { org: true })}`)).body.ok).toBe(true);
+
+      const sourceTeamId = await db.teams.getOrCreateTeamId(SOURCE_TEAM);
+      const sourceStore = new NormalizedOrgStore(db.adapter);
+      const sourceOrg = await sourceStore.readOrg(sourceTeamId);
+      expect(sourceOrg?.groups.engineering.groups?.platform.lead).toBe('alpha');
+      expect(sourceOrg?.tags?.builders).toEqual(['alpha']);
+      expect((await db.teams.getConfig(sourceTeamId)).org).toBeUndefined();
+      const chart = fs.readFileSync(path.join(workDir, 'teams', SOURCE_TEAM, 'ORG_CHART.md'), 'utf8');
+      expect(chart).toContain('platform — Runs the thing');
+      expect(generateAgentOrgContext('alpha', sourceOrg!)).toContain('platform');
+
+      // A deprecated JSON copy cannot override normalized authority.
+      await db.teams.updateConfig(sourceTeamId, {
+        org: { groups: { Deprecated: { members: ['alpha'] } } },
+      });
 
       const exported = path.join(configDir, 'org-export.yaml');
       expect((await run(`/export ${SOURCE_TEAM} ${exported}`)).body.ok).toBe(true);
-      expect((yaml.load(fs.readFileSync(exported, 'utf-8')) as any).org).toBeTruthy();
+      const exportedOrg = (yaml.load(fs.readFileSync(exported, 'utf-8')) as any).org;
+      expect(exportedOrg.groups.engineering.groups.platform).toBeTruthy();
+      expect(exportedOrg.groups.Deprecated).toBeUndefined();
 
       expect((await run(`/import ${exported} --team ${NEW_TEAM}`)).body.ok).toBe(true);
 
       const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
-      const stored = (await db.teams.getConfig(newTeamId)).org as any;
-      expect(stored?.groups?.engineering).toBeTruthy();
+      const importedOrg = await sourceStore.readOrg(newTeamId);
+      expect(importedOrg).toEqual(sourceOrg);
+      expect((await db.teams.getConfig(newTeamId)).org).toBeUndefined();
     });
 
     it('records last_config_path as the imported file', async () => {
@@ -203,6 +228,56 @@ agents:
 
       const newTeamId = await db.teams.getOrCreateTeamId(NEW_TEAM);
       expect((await db.teams.getConfig(newTeamId)).last_config_path).toBe(exported);
+    });
+
+    it('feeds the spawn path per-agent context from normalized authority', async () => {
+      expect((await run(`/deploy ${writeConfig(SOURCE_TEAM, { org: true })}`)).body.ok).toBe(true);
+      const sourceTeamId = await db.teams.getOrCreateTeamId(SOURCE_TEAM);
+      await db.teams.updateConfig(sourceTeamId, {
+        org: { groups: { Deprecated: { members: ['alpha'] } } },
+      });
+      let capturedContext = '';
+      (manager as any).deploySkillsToAgent = (
+        _workdir: string,
+        _skills: string[],
+        replacements: { ORG_CONTEXT?: string },
+      ) => {
+        capturedContext = replacements.ORG_CONTEXT || '';
+      };
+      const response = await fetch(`${baseUrl}/agents/spawn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Id-Team': SOURCE_TEAM },
+        body: JSON.stringify({
+          name: 'alpha',
+          model: 'claude-haiku-4-5-20251001',
+          local: true,
+        }),
+      });
+      expect(response.ok).toBe(true);
+      expect(capturedContext).toContain('engineering');
+      expect(capturedContext).toContain('platform');
+      expect(capturedContext).not.toContain('Deprecated');
+    });
+
+    it('normalizes a tags-only org instead of falsely classifying no-org', async () => {
+      const agentDir = path.join(configDir, 'tags-only-wd');
+      fs.mkdirSync(agentDir, { recursive: true });
+      const configPath = path.join(configDir, 'tags-only.yaml');
+      fs.writeFileSync(configPath, `version: "1"
+team: tags-only
+org:
+  tags:
+    builders: [alpha]
+agents:
+  - name: alpha
+    model: claude-haiku-4-5-20251001
+    workingDirectory: ${agentDir}
+`);
+      expect((await run(`/deploy ${configPath}`)).body.ok).toBe(true);
+      const id = await db.teams.getOrCreateTeamId('tags-only');
+      const store = new NormalizedOrgStore(db.adapter);
+      expect(await store.getState(id)).toMatchObject({ status: 'normalized' });
+      expect(await store.readOrg(id)).toEqual({ groups: {}, tags: { builders: ['alpha'] } });
     });
   });
 

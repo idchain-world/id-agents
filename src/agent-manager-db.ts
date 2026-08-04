@@ -83,6 +83,7 @@ import {
   recordCheckinCreated,
 } from './wakeup-service/event-producer.js';
 import { RetentionService } from './wakeup-service/retention.js';
+import { NormalizedOrgStore, OrgValidationError } from './org/normalized-org.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
   DEFAULT_CLOSE_WHEN,
@@ -367,6 +368,7 @@ export class AgentManagerDb {
   private wsClients: Set<WSClient> = new Set();
   private baseWorkDir: string;
   private db: Db;
+  private orgStore: NormalizedOrgStore;
   private runningServers: Map<string, AgentRestServer> = new Map(); // key: `${teamId}:${agentId}`
 
   /**
@@ -442,6 +444,7 @@ export class AgentManagerDb {
   ) {
     this.baseWorkDir = baseWorkDir;
     this.db = db;
+    this.orgStore = new NormalizedOrgStore(db.adapter);
     if (opts?.deliverFn) this.deliverFn = opts.deliverFn;
     if (opts?.healthProbeFn) this.healthProbeFn = opts.healthProbeFn;
     this.libraryRoot =
@@ -1023,10 +1026,21 @@ export class AgentManagerDb {
   ): Promise<{ org?: OrgConfig; warning?: string }> {
     let configPath: unknown;
     try {
+      const state = await this.orgStore.getState(teamId);
+      if (state?.status === 'normalized') {
+        const org = await this.orgStore.readOrg(teamId);
+        if (!org) return { warning: 'org_data_corrupt: normalized org state has no readable org' };
+        return { org };
+      }
+      if (state?.status === 'intentionally_no_org') return {};
+      if (state?.status === 'blocked') {
+        return { warning: `org_migration_required: ${state.reason || 'team org migration is blocked'}` };
+      }
       const teamConfig = await this.db.teams.getConfig(teamId);
       if (teamConfig.org) return { org: teamConfig.org as OrgConfig };
       configPath = teamConfig.last_config_path;
-    } catch {
+    } catch (error) {
+      if (error instanceof OrgValidationError) return { warning: `${error.code}: ${error.message}` };
       return {};
     }
 
@@ -6109,38 +6123,17 @@ export class AgentManagerDb {
           resolvedWorkdirs.set(agentConfig.name, verdict.path);
         }
 
-        // Remember the config file for this team so runtime profile edits
-        // (POST /agents/by-name/:name/profile) can persist back to YAML.
-        // Persist the parsed org block alongside the config path. The database
-        // is the source of truth, so export reads org from HERE rather than
-        // re-reading the file — which is why /export previously emitted no org
-        // block at all: nothing ever wrote this field.
+        // Remember the config file for runtime profile edits. Org is persisted
+        // only in normalized rows after agent IDs exist; teams.config.org is a
+        // deprecated legacy fallback and is never written by a new deploy.
         await this.db.teams.updateConfig(effectiveTeamId, {
           last_config_path: absolutePath,
-          ...(org ? { org } : {}),
         });
 
         for (const agentConfig of agents) {
           const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
           const effectiveModel = agentConfig.model || getDefaultModelForRuntime(effectiveRuntime, this.defaultConfig?.model);
           this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
-        }
-
-        // Generate org chart if defined in config
-        if (org?.groups) {
-          try {
-            const { generateOrgChart } = await import('./org-chart.js');
-            const orgMd = generateOrgChart(effectiveTeamName, org, agents.map(a => ({
-              name: a.name,
-              description: a.description,
-            })));
-            const teamDir = `${this.baseWorkDir}/teams/${effectiveTeamName}`;
-            if (!existsSync(teamDir)) mkdirSync(teamDir, { recursive: true });
-            writeFileSync(`${teamDir}/ORG_CHART.md`, orgMd);
-            console.log(`[Deploy] Org chart written to teams/${effectiveTeamName}/ORG_CHART.md`);
-          } catch (err: any) {
-            console.warn(`[Deploy] Could not generate org chart: ${err.message}`);
-          }
         }
 
         // Validate automator naming: first automator must be named "lead-automator"
@@ -6380,6 +6373,32 @@ export class AgentManagerDb {
             }
             results.push({ name: agentConfig.name, success: false, error: err.message });
           }
+        }
+
+        // Agent rows now exist, so every org reference can be resolved to an
+        // immutable in-team ID and committed atomically. The chart is rendered
+        // from a fresh normalized read, never from the parsed legacy object.
+        if (org && (org.groups || org.tags)) {
+          await this.orgStore.replaceFromConfig(effectiveTeamId, org, {
+            decidedBy: 'deploy',
+            reason: `normalized from ${absolutePath}`,
+          });
+          const normalizedOrg = await this.orgStore.readOrg(effectiveTeamId);
+          if (!normalizedOrg) throw new Error('org_data_corrupt: normalized deploy org is unreadable');
+          const { generateOrgChart } = await import('./org-chart.js');
+          const orgMd = generateOrgChart(effectiveTeamName, normalizedOrg, agents.map(a => ({
+            name: a.name,
+            description: a.description,
+          })));
+          const teamDir = `${this.baseWorkDir}/teams/${effectiveTeamName}`;
+          if (!existsSync(teamDir)) mkdirSync(teamDir, { recursive: true });
+          writeFileSync(`${teamDir}/ORG_CHART.md`, orgMd);
+          console.log(`[Deploy] Org chart written from normalized state to teams/${effectiveTeamName}/ORG_CHART.md`);
+        } else {
+          await this.orgStore.markIntentionallyNoOrg(effectiveTeamId, {
+            decidedBy: 'deploy',
+            reason: `deployed config ${absolutePath} contains no org block`,
+          });
         }
 
         if (calendar.length > 0 && this.schedulerService) {

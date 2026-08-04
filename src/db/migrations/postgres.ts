@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 import type { DbAdapter } from '../db-adapter.js';
+import { migrateOrgSchemaPostgres } from './org-schema.js';
 
 export async function migratePostgres(adapter: DbAdapter): Promise<void> {
   // Minimal "migrations" run on startup (idempotent).
@@ -700,6 +701,7 @@ export async function migratePostgres(adapter: DbAdapter): Promise<void> {
   `);
 
   await migrateDeleteManagerShadowAgentsPostgres(adapter);
+  await migrateOrgSchemaPostgres(adapter);
 }
 
 /** Null manager-owned FK columns and delete manager-<team> shadow agent rows. */

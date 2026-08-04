@@ -22,6 +22,12 @@ import {
 import { validateName } from './name-validation.js';
 import { enumerateLibraryAgents } from './lib/agent-library.js';
 import { resolveDefaultLibraryRoot } from './lib/library-inventory.js';
+import {
+  containsUnexpandedTemplate,
+  normalizeOrgKey,
+  ORG_MAX_DEPTH,
+  ORG_MAX_GROUPS,
+} from './org/normalization.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -663,6 +669,100 @@ export function validateConfig(config: DeployConfig): ValidationResult {
       }
     }
   });
+
+  if (config.org !== undefined) {
+    const agentCounts = new Map<string, number>();
+    for (const agent of config.agents) {
+      agentCounts.set(agent.name, (agentCounts.get(agent.name) ?? 0) + 1);
+    }
+    let groupCount = 0;
+    const validateAgentRef = (value: unknown, refPath: string): void => {
+      if (typeof value !== 'string' || !value || containsUnexpandedTemplate(value)) {
+        errors.push({ path: refPath, message: 'org agent reference must be a resolved non-empty string' });
+        return;
+      }
+      const count = agentCounts.get(value) ?? 0;
+      if (count === 0) errors.push({ path: refPath, message: `org agent reference does not resolve: ${value}` });
+      else if (count > 1) errors.push({ path: refPath, message: `org agent reference is ambiguous: ${value}` });
+    };
+    const visitGroups = (groups: unknown, groupPath: string, depth: number): void => {
+      if (!groups || typeof groups !== 'object' || Array.isArray(groups)) {
+        errors.push({ path: groupPath, message: 'org groups must be an object' });
+        return;
+      }
+      if (depth > ORG_MAX_DEPTH) {
+        errors.push({ path: groupPath, message: `org group depth exceeds ${ORG_MAX_DEPTH}` });
+        return;
+      }
+      const siblingKeys = new Set<string>();
+      for (const [name, raw] of Object.entries(groups as Record<string, unknown>)) {
+        groupCount += 1;
+        const pathAtGroup = `${groupPath}.${name}`;
+        if (!name.trim() || containsUnexpandedTemplate(name)) {
+          errors.push({ path: pathAtGroup, message: 'org group name must be resolved and non-empty' });
+        }
+        const normalized = normalizeOrgKey(name);
+        if (siblingKeys.has(normalized)) {
+          errors.push({ path: pathAtGroup, message: `duplicate normalized sibling group: ${name}` });
+        }
+        siblingKeys.add(normalized);
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+          errors.push({ path: pathAtGroup, message: 'org group must be an object' });
+          continue;
+        }
+        const group = raw as Record<string, unknown>;
+        if (group.description !== undefined && typeof group.description !== 'string') {
+          errors.push({ path: `${pathAtGroup}.description`, message: 'org group description must be a string' });
+        }
+        if (group.lead !== undefined) validateAgentRef(group.lead, `${pathAtGroup}.lead`);
+        if (group.members !== undefined) {
+          if (!Array.isArray(group.members)) {
+            errors.push({ path: `${pathAtGroup}.members`, message: 'org group members must be an array' });
+          } else {
+            const seen = new Set<string>();
+            group.members.forEach((member, index) => {
+              validateAgentRef(member, `${pathAtGroup}.members[${index}]`);
+              if (typeof member === 'string' && seen.has(member)) {
+                errors.push({ path: `${pathAtGroup}.members[${index}]`, message: `duplicate org member: ${member}` });
+              }
+              if (typeof member === 'string') seen.add(member);
+            });
+          }
+        }
+        if (group.groups !== undefined) visitGroups(group.groups, `${pathAtGroup}.groups`, depth + 1);
+      }
+    };
+    visitGroups(config.org.groups ?? {}, 'org.groups', 1);
+    if (groupCount > ORG_MAX_GROUPS) {
+      errors.push({ path: 'org.groups', message: `org group count exceeds ${ORG_MAX_GROUPS}` });
+    }
+    if (config.org.tags !== undefined) {
+      if (!config.org.tags || typeof config.org.tags !== 'object' || Array.isArray(config.org.tags)) {
+        errors.push({ path: 'org.tags', message: 'org tags must be an object' });
+      } else {
+        const tagKeys = new Set<string>();
+        for (const [name, members] of Object.entries(config.org.tags)) {
+          const normalized = normalizeOrgKey(name);
+          if (tagKeys.has(normalized)) {
+            errors.push({ path: `org.tags.${name}`, message: `duplicate normalized org tag: ${name}` });
+          }
+          tagKeys.add(normalized);
+          if (!Array.isArray(members)) {
+            errors.push({ path: `org.tags.${name}`, message: 'org tag members must be an array' });
+            continue;
+          }
+          const seen = new Set<string>();
+          members.forEach((member, index) => {
+            validateAgentRef(member, `org.tags.${name}[${index}]`);
+            if (seen.has(member)) {
+              errors.push({ path: `org.tags.${name}[${index}]`, message: `duplicate org tag assignment: ${member}` });
+            }
+            seen.add(member);
+          });
+        }
+      }
+    }
+  }
 
   // Validate defaults
   if (config.defaults) {
