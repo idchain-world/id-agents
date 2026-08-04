@@ -28,6 +28,13 @@ export interface OrgState {
   sourceHash: string | null;
 }
 
+export interface OrgValidationMetrics {
+  groupCount: number;
+  explicitMembershipCount: number;
+  tagCount: number;
+  tagAssignmentCount: number;
+}
+
 export class OrgValidationError extends Error {
   constructor(
     readonly code: 'org_data_corrupt' | 'org_reference_unresolved' | 'org_reference_ambiguous' | 'org_template_unexpanded',
@@ -171,6 +178,19 @@ export class NormalizedOrgStore {
       }
       await this.writeState(tx, teamId, 'normalized', decision);
     });
+  }
+
+  async validateFromConfig(teamId: string, org: OrgConfig): Promise<OrgValidationMetrics> {
+    const prepared = await this.prepare(teamId, org);
+    return {
+      groupCount: prepared.groups.length,
+      explicitMembershipCount: prepared.groups.reduce(
+        (count, group) => count + group.memberAgentIds.length,
+        0,
+      ),
+      tagCount: prepared.tags.length,
+      tagAssignmentCount: prepared.tags.reduce((count, tag) => count + tag.agentIds.length, 0),
+    };
   }
 
   async markIntentionallyNoOrg(teamId: string, decision: OrgDecision): Promise<void> {

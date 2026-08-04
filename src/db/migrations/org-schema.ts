@@ -86,6 +86,22 @@ export async function migrateOrgSchemaSqlite(adapter: SqliteAdapter): Promise<vo
         REFERENCES agents(team_id, id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS org_migration_audit (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      status TEXT NOT NULL CHECK (status IN ('normalized', 'intentionally_no_org', 'blocked')),
+      source_path TEXT,
+      source_hash TEXT,
+      group_count INTEGER NOT NULL DEFAULT 0,
+      tag_assignment_count INTEGER NOT NULL DEFAULT 0,
+      reason TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS org_migration_audit_run_idx
+      ON org_migration_audit(run_id, team_id);
+
     CREATE TRIGGER IF NOT EXISTS org_groups_no_cycle_insert
     BEFORE INSERT ON org_groups
     WHEN NEW.parent_group_id IS NOT NULL
@@ -230,6 +246,21 @@ export async function migrateOrgSchemaPostgres(adapter: DbAdapter): Promise<void
         REFERENCES agents(team_id, id) ON DELETE CASCADE
     )
   `);
+  await adapter.query(`
+    CREATE TABLE IF NOT EXISTS org_migration_audit (
+      id uuid PRIMARY KEY,
+      run_id uuid NOT NULL,
+      team_id uuid NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      status text NOT NULL CHECK (status IN ('normalized', 'intentionally_no_org', 'blocked')),
+      source_path text,
+      source_hash text,
+      group_count integer NOT NULL DEFAULT 0,
+      tag_assignment_count integer NOT NULL DEFAULT 0,
+      reason text,
+      created_at bigint NOT NULL
+    )
+  `);
+  await adapter.query(`CREATE INDEX IF NOT EXISTS org_migration_audit_run_idx ON org_migration_audit(run_id, team_id)`);
   await adapter.query(`
     CREATE OR REPLACE FUNCTION reject_org_group_cycle() RETURNS trigger AS $$
     BEGIN

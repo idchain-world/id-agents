@@ -29,6 +29,7 @@ import { SqliteTasksRepo } from '../../src/db/repos/sqlite/tasks-repo.js';
 import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
 import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
 import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
+import { NormalizedOrgStore } from '../../src/org/normalized-org.js';
 
 async function createInMemoryDb() {
   const adapter = new SqliteAdapter(':memory:');
@@ -71,29 +72,6 @@ describe('POST /agents/spawn parity with deploy (§6.2)', () => {
   /** Every deploySkillsToAgent call, so org context can be inspected. */
   let skillCalls: Array<{ vars: Record<string, string>; opts: { hasWallet: boolean } }>;
   let walletCalls: Array<{ team: string; agent: string }>;
-
-  // `members` matters: generateAgentOrgContext only emits for a group's lead or
-  // a direct member, so the spawned agent has to actually be in the org.
-  function writeTeamConfig(withOrg: boolean, members: string[] = ['alpha']): string {
-    const p = path.join(configDir, `${TEAM}.yaml`);
-    const orgBlock = withOrg
-      ? `
-org:
-  groups:
-    engineering:
-      description: "Builds the thing"
-      members: [${members.join(', ')}]
-`
-      : '';
-    fs.writeFileSync(p, `version: "1"
-team: ${TEAM}
-${orgBlock}
-agents:
-  - name: alpha
-    description: "seed"
-`);
-    return p;
-  }
 
   beforeEach(async () => {
     const port = await findFreePort();
@@ -148,6 +126,22 @@ agents:
     return (row?.metadata || {}) as Record<string, unknown>;
   }
 
+  async function storeOrg(members: string[]): Promise<void> {
+    for (const [index, name] of members.entries()) {
+      await db.adapter.query(
+        `INSERT INTO agents
+           (id, team_id, name, type, model, port, status, created_at, metadata, runtime)
+         VALUES (?, ?, ?, 'claude', 'model', 0, 'running', ?, '{}', 'codex')`,
+        [`fixture-${name}`, teamId, name, index + 1],
+      );
+    }
+    await new NormalizedOrgStore(db.adapter).replaceFromConfig(teamId, {
+      groups: {
+        engineering: { description: 'Builds the thing', members },
+      },
+    }, { decidedBy: 'test', decidedAt: 1, reason: 'fixture' });
+  }
+
   describe('wallet (deploy provisions on wallet:true; spawn did not)', () => {
     it('spawn with wallet:true gets ows_wallet AND ows_address', async () => {
       const { status } = await spawn('withwallet', { wallet: true });
@@ -188,7 +182,7 @@ agents:
 
   describe('org context (deploy passes it; spawn passed an empty string)', () => {
     it('a spawn into an org team receives org context in its skills', async () => {
-      await db.teams.updateConfig(teamId, { last_config_path: writeTeamConfig(true, ['orgagent', 'alpha']) });
+      await storeOrg(['orgagent', 'alpha']);
 
       const { status } = await spawn('orgagent', { skills: ['some-skill'] });
       expect(status).toBeLessThan(400);
@@ -200,7 +194,9 @@ agents:
     });
 
     it('a spawn into a NON-org team receives no org context', async () => {
-      await db.teams.updateConfig(teamId, { last_config_path: writeTeamConfig(false) });
+      await new NormalizedOrgStore(db.adapter).markIntentionallyNoOrg(teamId, {
+        decidedBy: 'test', decidedAt: 1, reason: 'fixture',
+      });
 
       await spawn('plainagent', { skills: ['some-skill'] });
       expect(skillCalls.at(-1)?.vars.ORG_CONTEXT).toBe('');
@@ -210,7 +206,7 @@ agents:
       // Deploy always calls deploySkillsToAgent, so context always lands there.
       // Spawn only called it when skills were requested, which would have
       // dropped the context for a skill-less spawn.
-      await db.teams.updateConfig(teamId, { last_config_path: writeTeamConfig(true, ['noskills', 'alpha']) });
+      await storeOrg(['noskills', 'alpha']);
 
       await spawn('noskills');
       expect(skillCalls.at(-1)?.vars.ORG_CONTEXT).toContain('engineering');

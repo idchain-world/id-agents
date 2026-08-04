@@ -7,9 +7,8 @@
  * ANY team. Silent, and invisible to a row-level completeness check because it
  * is team-level state, not agent state.
  *
- * The fix is persistence, not file-reading: deploy stores the parsed block on
- * the team row, export reads it from there. Legacy teams — deployed before that
- * existed — fall back to the config file WITH a warning, never silently.
+ * Normalized database rows are the only runtime authority. An unclassified
+ * legacy team is reported as migration-required and never reads its folder.
  *
  * Fixtures only; the live DB on :4100 is never touched.
  */
@@ -136,13 +135,17 @@ agents:
     return await resp.json() as any;
   }
 
-  it('deploy persists org on the team row, and export emits it from there', async () => {
+  it('deploy persists normalized org and export emits it from database authority', async () => {
     expect((await run(`/deploy ${writeConfig(true)}`)).ok).toBe(true);
 
     // Persisted in the database — the source of truth.
     const teamId = await db.teams.getOrCreateTeamId(TEAM);
-    const stored = (await db.teams.getConfig(teamId)).org as any;
-    expect(stored?.groups?.engineering?.members).toEqual(['alpha']);
+    expect((await db.teams.getConfig(teamId)).org).toBeUndefined();
+    const state = await db.adapter.query<{ status: string }>(
+      `SELECT status FROM team_org_state WHERE team_id = ?`,
+      [teamId],
+    );
+    expect(state.rows[0]?.status).toBe('normalized');
 
     const target = path.join(configDir, 'exported.yaml');
     const body = await run(`/export ${TEAM} ${target}`);
@@ -150,11 +153,10 @@ agents:
 
     const doc = yaml.load(fs.readFileSync(target, 'utf-8')) as any;
     expect(doc.org?.groups?.engineering?.members).toEqual(['alpha']);
-    // Read from the row, so no legacy warning.
-    expect((body.result.warnings as string[]).join('\n')).not.toContain('not stored on the team row');
+    expect((body.result.warnings as string[]).join('\n')).not.toContain('org_migration_required');
   });
 
-  it('a LEGACY team (org in the file, not the row) still exports it, WITH a warning', async () => {
+  it('an unclassified legacy team never falls back to its org file', async () => {
     // Reproduce the pre-fix world: config path recorded, org absent from the row.
     const legacyConfig = writeConfig(true, 'legacy');
     const teamId = await db.teams.getOrCreateTeamId(TEAM);
@@ -165,13 +167,11 @@ agents:
     const body = await run(`/export ${TEAM} ${target}`);
     expect(body.ok).toBe(true);
 
-    // Emitted...
     const doc = yaml.load(fs.readFileSync(target, 'utf-8')) as any;
-    expect(doc.org?.groups?.engineering).toBeTruthy();
-    // ...and never silently: the warning names the file it had to reach for.
+    expect(doc.org).toBeUndefined();
     const warnings = (body.result.warnings as string[]).join('\n');
-    expect(warnings).toContain('not stored on the team row');
-    expect(warnings).toContain(legacyConfig);
+    expect(warnings).toContain('org_migration_required');
+    expect(warnings).not.toContain(legacyConfig);
   });
 
   it('a team with no org anywhere emits no block and no warning', async () => {
@@ -182,7 +182,7 @@ agents:
     const doc = yaml.load(fs.readFileSync(target, 'utf-8')) as any;
 
     expect(doc.org).toBeUndefined();
-    expect((body.result.warnings as string[]).join('\n')).not.toContain('not stored on the team row');
+    expect((body.result.warnings as string[]).join('\n')).not.toContain('org_migration_required');
   });
 
   it('an unreadable recorded config yields no org and no failure', async () => {
@@ -193,6 +193,7 @@ agents:
     const body = await run(`/export ${TEAM} ${target}`);
     expect(body.ok).toBe(true);
     expect((yaml.load(fs.readFileSync(target, 'utf-8')) as any).org).toBeUndefined();
+    expect((body.result.warnings as string[]).join('\n')).toContain('org_migration_required');
   });
 
   it('spawn org context still works when org comes from the row', async () => {

@@ -119,6 +119,7 @@ describe.each(dialects)('normalized org schema parity (%s)', (dialect) => {
         'org_group_leads',
         'org_group_members',
         'org_groups',
+        'org_migration_audit',
         'org_tags',
       ]);
     } else {
@@ -131,6 +132,7 @@ describe.each(dialects)('normalized org schema parity (%s)', (dialect) => {
         'org_group_leads',
         'org_group_members',
         'org_groups',
+        'org_migration_audit',
         'org_tags',
       ]);
     }

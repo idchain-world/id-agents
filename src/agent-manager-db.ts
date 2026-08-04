@@ -1005,26 +1005,14 @@ export class AgentManagerDb {
   }
 
   /**
-   * The team's `org` block. THE single reader — spawn, /export and auto-export
-   * all come through here, so there is one definition of where org lives.
-   *
-   * The database is the source of truth, so the teams row is preferred. Deploy
-   * persists the parsed block there at create time.
-   *
-   * LEGACY FALLBACK: teams deployed before that persistence existed have no
-   * org in the row, and their org would otherwise vanish from every export.
-   * Those fall back to reading `last_config_path` — but never silently: the
-   * caller gets a warning naming the file it had to reach for, because reading
-   * a file behind the database's back is exactly the coupling this build is
-   * removing, and it should be visible until those teams are re-exported.
-   *
-   * Any failure yields no org and no throw. A moved or unparseable config must
-   * not stop an agent spawning or an export completing.
+   * The team's `org` block. Spawn, export and auto-export all use normalized
+   * database authority. Commit 3 deliberately removes the file/JSON fallback:
+   * an unclassified team must be backfilled before org-dependent behavior can
+   * proceed, and cannot silently resurrect stale hierarchy from a folder.
    */
   private async loadTeamOrg(
     teamId: string,
   ): Promise<{ org?: OrgConfig; warning?: string }> {
-    let configPath: unknown;
     try {
       const state = await this.orgStore.getState(teamId);
       if (state?.status === 'normalized') {
@@ -1036,26 +1024,10 @@ export class AgentManagerDb {
       if (state?.status === 'blocked') {
         return { warning: `org_migration_required: ${state.reason || 'team org migration is blocked'}` };
       }
-      const teamConfig = await this.db.teams.getConfig(teamId);
-      if (teamConfig.org) return { org: teamConfig.org as OrgConfig };
-      configPath = teamConfig.last_config_path;
+      return { warning: 'org_migration_required: team has no audited org classification' };
     } catch (error) {
       if (error instanceof OrgValidationError) return { warning: `${error.code}: ${error.message}` };
-      return {};
-    }
-
-    if (typeof configPath !== 'string' || !configPath) return {};
-    try {
-      const parsed = yaml.load(readFileSync(configPath, 'utf-8')) as { org?: OrgConfig };
-      if (!parsed?.org) return {}; // no org anywhere: nothing to report
-      return {
-        org: parsed.org,
-        warning:
-          `Team org block read from ${configPath} because it is not stored on the team row ` +
-          `(team predates org persistence). Re-export or re-deploy to store it in the database.`,
-      };
-    } catch {
-      return {}; // missing or unparseable — best effort, never fatal
+      return { warning: `org_migration_required: ${(error as Error).message}` };
     }
   }
 
@@ -3095,9 +3067,8 @@ export class AgentManagerDb {
           ? this.getOrCreateAgentWallet(teamName, name)
           : null;
 
-        // §6.2 PARITY STEP 2 — org context. Deploy has the parsed config in
-        // hand; spawn does not, so it recovers the team's `org` block from the
-        // config file the team recorded.
+        // §6.2 PARITY STEP 2 — org context. Spawn reads the same normalized
+        // database authority as deploy/export; team folders are not consulted.
         const { org: spawnOrg } = await this.loadTeamOrg(teamId);
         let spawnOrgContext = '';
         if (spawnOrg?.groups) {

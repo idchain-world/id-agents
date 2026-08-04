@@ -77,3 +77,74 @@ Could not do: none.
 Plan defects found: the repository had no executing PostgreSQL parity harness. The gate
 could not honestly pass by inspection alone, so commit 2 adds and executes a disposable
 real-PostgreSQL test path rather than weakening the gate.
+
+## Commit 3 — Audited nine-team backfill
+
+Built:
+
+- A deterministic dry-run/apply backfill using the normalized commit-2 validator and
+  writer, with source hashes, semantic read-back, recursive-member results, per-team
+  terminal decisions, and one database audit row per team and run.
+- Explicit blocking for missing/unreadable sources, missing org content, unexpanded
+  templates, invalid YAML, unresolved references, and unacknowledged source drift. A
+  no-org override is accepted only for absent or unrecoverable org content; it cannot
+  erase a resolvable organization and always retains discovered source evidence.
+- A CLI that refuses the live database by resolved path, dry-runs on a private copy,
+  creates an exclusive integrity-checked rollback copy before apply, and refuses restore
+  if the migrated target has drifted. Apply requires absolute rollback and audit paths.
+- Runtime removal of the legacy JSON/file fallback. Normalized state is authoritative,
+  `intentionally_no_org` is empty by decision, and blocked or unclassified state reports
+  `org_migration_required`. Deprecated `teams.config.org` is removed only after every
+  team has both a terminal state and an audit row for the run.
+- SQLite and PostgreSQL audit-schema parity and updated spawn/export fixtures that
+  exercise normalized authority rather than the removed fallback.
+
+Audited snapshot classifications:
+
+| Team | Classification | Groups | Explicit memberships | Tag assignments | Reason |
+| --- | --- | ---: | ---: | ---: | --- |
+| all | blocked | 0 | 0 | 0 | `missing_source_path` |
+| dappa | normalized | 1 | 5 | 4 | source hash `f6ae23d0…7884b` |
+| default | blocked | 0 | 0 | 0 | `source_has_no_org` |
+| default2 | blocked | 0 | 0 | 0 | `source_has_no_org` |
+| idchain | normalized | 2 | 17 | 14 | source hash `1e68acb2…53cd7` |
+| lab | blocked | 0 | 0 | 0 | `source_has_no_org` |
+| public | blocked | 0 | 0 | 0 | `missing_source_path` |
+| security | normalized | 3 | 11 | 0 | source hash `e051a011…8f36` |
+| tradeagent | normalized | 1 | 2 | 2 | source hash `2e98abca…b9fc` |
+
+The explicit-membership totals intentionally exclude each repeated lead. Leads remain
+implicit recursive members, so no source person was lost. The audit preserved group
+descriptions and source order and recorded these recursive results: dappa `technical`
+(6 people); idchain `technical` (17) and `marketing` (1); security `leadership` (1),
+`stack-agents` (4), and `specialists` (7); tradeagent `technical` (3).
+
+Gate proof:
+
+- The prepared 75 MB snapshot was copied twice before use. No command opened or mutated
+  `~/.id-agents/id-agents.db`, and the prepared snapshot itself was never migrated.
+- Final dry-run copy: 9 teams, 4 normalized, 5 blocked, 7 groups, 20 tag assignments;
+  input SHA-256 remained `d90fbb49…d77925`.
+- Final apply copy: SQLite integrity `ok`, 9 state rows, 9 audit rows, 7 group rows, and
+  20 tag-assignment rows. Each normalized write passed semantic read-back for group
+  descriptions/order, tags/order, and recursive members.
+- Refusing rollback was covered by a drift test. Successful restore changed the applied
+  copy from `087525e1…8789` back to the exact pre-apply hash `d90fbb49…d77925`, with
+  integrity `ok`.
+- Node 22 focused gate: 6 files, 56 tests passed. The synthetic nine-team suite includes
+  team-local template/unresolved/missing-source failures, no partial rows, override
+  conflicts, source-drift acknowledgment, dry-run immutability, live-path refusal, and
+  rollback refusal/restoration.
+- Full Node 22 repository suite: 115 files passed, 5 skipped; 1,253 tests passed,
+  60 skipped.
+- Disposable PostgreSQL 16 parity: 16 tests passed; `npm run build:core` and
+  `git diff --check` passed.
+- Seniordev independently inspected the implementation and gate evidence and returned
+  `APPROVE` after the override-conflict and per-run audit-count checks were added. We
+  explicitly agreed that source-drift acknowledgment can never authorize org erasure.
+
+Could not do: no `intentionally_no_org` override was applied to the five historical teams;
+none was supplied by the operator, so the three readable no-org sources and two missing
+source paths remain correctly blocked for inspection.
+
+Plan defects found: none in commit 3.
