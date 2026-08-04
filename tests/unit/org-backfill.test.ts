@@ -13,6 +13,7 @@ import {
   assertSafeDatabasePath,
   dryRunOrgBackfill,
   fileSha256,
+  parseNoOrgOverrides,
   restoreOrgBackfillSnapshot,
 } from '../../src/org/backfill-cli.js';
 
@@ -248,7 +249,7 @@ describe('audited organization backfill', () => {
     expect(applied.beforeSha256).toBe(originalHash);
     expect(fs.existsSync(rollbackPath)).toBe(true);
     expect(JSON.parse(fs.readFileSync(auditOutputPath, 'utf8')).teams).toHaveLength(1);
-    restoreOrgBackfillSnapshot({
+    await restoreOrgBackfillSnapshot({
       databasePath,
       rollbackPath,
       expectedCurrentSha256: applied.afterSha256,
@@ -262,16 +263,65 @@ describe('audited organization backfill', () => {
       decidedBy: 'test',
     });
     fs.appendFileSync(databasePath, 'drift');
-    expect(() => restoreOrgBackfillSnapshot({
+    await expect(restoreOrgBackfillSnapshot({
       databasePath,
       rollbackPath: path.join(root, 'rollback-2.db'),
       expectedCurrentSha256: appliedAgain.afterSha256,
-    })).toThrow('target database drifted');
+    })).rejects.toThrow('target database drifted');
   });
 
   it('refuses the live database path before opening it', () => {
     const live = path.join(os.homedir(), '.id-agents', 'id-agents.db');
     if (fs.existsSync(live)) expect(() => assertSafeDatabasePath(live)).toThrow('refusing to open');
+  });
+
+  it('requires an exact explicit opt-in for the live database and warns loudly', () => {
+    const live = path.join(os.homedir(), '.id-agents', 'id-agents.db');
+    if (!fs.existsSync(live)) return;
+    const writes: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      writes.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(assertSafeDatabasePath(live, true)).toBe(fs.realpathSync(live));
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    expect(writes.join('')).toContain('WARNING');
+    expect(writes.join('')).toContain('LIVE ~/.id-agents/id-agents.db');
+  });
+
+  it('requires a separate stopped-process confirmation before live restore', async () => {
+    const live = path.join(os.homedir(), '.id-agents', 'id-agents.db');
+    if (!fs.existsSync(live)) return;
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      await expect(restoreOrgBackfillSnapshot({
+        databasePath: live,
+        rollbackPath: '/does/not/matter-before-the-confirmation.db',
+        expectedCurrentSha256: 'not-used',
+        allowLiveDatabase: true,
+      })).rejects.toThrow('--confirm-live-processes-stopped');
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
+  it('parses only explicit audited no-org overrides', () => {
+    expect(parseNoOrgOverrides([])).toBeUndefined();
+    expect(() => parseNoOrgOverrides(['--intentionally-no-org', 'all']))
+      .toThrow('--no-org-reason');
+    expect(parseNoOrgOverrides([
+      '--intentionally-no-org', 'all',
+      '--intentionally-no-org', 'public',
+      '--no-org-reason', 'Prem approved no historical organization',
+    ])).toEqual({
+      all: { reason: 'Prem approved no historical organization' },
+      public: { reason: 'Prem approved no historical organization' },
+    });
   });
 });
 

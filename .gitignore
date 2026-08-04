@@ -52,3 +52,4 @@ output/
 .cursor/
 /bin/
 id-agents-demo-1.mp4
+.testdb/

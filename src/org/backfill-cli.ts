@@ -25,6 +25,7 @@ export interface ApplyBackfillOptions {
   rollbackPath: string;
   auditOutputPath: string;
   decidedBy: string;
+  allowLiveDatabase?: boolean;
   noOrgOverrides?: Record<string, { reason: string }>;
   acknowledgeSourceDrift?: boolean;
 }
@@ -33,14 +34,23 @@ export function liveDatabasePath(): string {
   return path.join(homedir(), '.id-agents', 'id-agents.db');
 }
 
-export function assertSafeDatabasePath(databasePath: string): string {
+function isLiveDatabase(target: string): boolean {
+  const live = liveDatabasePath();
+  const resolvedLive = existsSync(live) ? realpathSync(live) : path.resolve(live);
+  return target === resolvedLive;
+}
+
+export function assertSafeDatabasePath(databasePath: string, allowLiveDatabase = false): string {
   if (!path.isAbsolute(databasePath)) throw new Error('database path must be absolute');
   if (!existsSync(databasePath)) throw new Error(`database does not exist: ${databasePath}`);
   const target = realpathSync(databasePath);
-  const live = liveDatabasePath();
-  const resolvedLive = existsSync(live) ? realpathSync(live) : path.resolve(live);
-  if (target === resolvedLive) {
+  if (isLiveDatabase(target) && !allowLiveDatabase) {
     throw new Error('refusing to open or mutate the live ~/.id-agents/id-agents.db');
+  }
+  if (isLiveDatabase(target)) {
+    process.stderr.write(
+      '*** WARNING: --allow-live-database active; operating on LIVE ~/.id-agents/id-agents.db ***\n',
+    );
   }
   return target;
 }
@@ -58,6 +68,35 @@ function assertIntegrity(databasePath: string): void {
     }
   } finally {
     db.close();
+  }
+}
+
+async function snapshotDatabase(sourcePath: string, destinationPath: string, live: boolean): Promise<void> {
+  if (!live) {
+    copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
+    return;
+  }
+
+  // A live WAL database cannot be snapshotted by copying only the main file:
+  // committed pages may exist solely in -wal. SQLite's online backup API takes
+  // one consistent logical snapshot while readers and writers remain attached.
+  const source = new Database(sourcePath, { readonly: true, fileMustExist: true, timeout: 10_000 });
+  try {
+    await source.backup(destinationPath);
+  } finally {
+    source.close();
+  }
+}
+
+async function snapshotSha256(databasePath: string): Promise<string> {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'id-agents-org-hash-'));
+  const snapshotPath = path.join(tempRoot, 'snapshot.db');
+  try {
+    await snapshotDatabase(databasePath, snapshotPath, true);
+    assertIntegrity(snapshotPath);
+    return fileSha256(snapshotPath);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
   }
 }
 
@@ -86,14 +125,16 @@ export async function dryRunOrgBackfill(options: {
   databasePath: string;
   auditOutputPath?: string;
   decidedBy: string;
+  allowLiveDatabase?: boolean;
   noOrgOverrides?: Record<string, { reason: string }>;
   acknowledgeSourceDrift?: boolean;
 }): Promise<OrgBackfillReport> {
-  const source = assertSafeDatabasePath(options.databasePath);
+  const source = assertSafeDatabasePath(options.databasePath, options.allowLiveDatabase);
+  const live = isLiveDatabase(source);
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'id-agents-org-dryrun-'));
   const tempDatabase = path.join(tempRoot, 'dryrun.db');
   try {
-    copyFileSync(source, tempDatabase, fsConstants.COPYFILE_EXCL);
+    await snapshotDatabase(source, tempDatabase, live);
     const report = await runOnDatabase(
       tempDatabase,
       true,
@@ -113,16 +154,17 @@ export async function applyOrgBackfill(options: ApplyBackfillOptions): Promise<{
   beforeSha256: string;
   afterSha256: string;
 }> {
-  const database = assertSafeDatabasePath(options.databasePath);
+  const database = assertSafeDatabasePath(options.databasePath, options.allowLiveDatabase);
+  const live = isLiveDatabase(database);
   if (!path.isAbsolute(options.rollbackPath) || !path.isAbsolute(options.auditOutputPath)) {
     throw new Error('rollback and audit output paths must be absolute');
   }
   if (existsSync(options.rollbackPath)) throw new Error(`rollback path already exists: ${options.rollbackPath}`);
   if (existsSync(options.auditOutputPath)) throw new Error(`audit output already exists: ${options.auditOutputPath}`);
   assertIntegrity(database);
-  const beforeSha256 = fileSha256(database);
-  copyFileSync(database, options.rollbackPath, fsConstants.COPYFILE_EXCL);
+  await snapshotDatabase(database, options.rollbackPath, live);
   assertIntegrity(options.rollbackPath);
+  const beforeSha256 = fileSha256(options.rollbackPath);
   const report = await runOnDatabase(
     database,
     false,
@@ -131,7 +173,7 @@ export async function applyOrgBackfill(options: ApplyBackfillOptions): Promise<{
     options.acknowledgeSourceDrift,
   );
   assertIntegrity(database);
-  const afterSha256 = fileSha256(database);
+  const afterSha256 = live ? await snapshotSha256(database) : fileSha256(database);
   writeFileSync(options.auditOutputPath, `${JSON.stringify({
     ...report,
     database,
@@ -142,14 +184,23 @@ export async function applyOrgBackfill(options: ApplyBackfillOptions): Promise<{
   return { report, beforeSha256, afterSha256 };
 }
 
-export function restoreOrgBackfillSnapshot(options: {
+export async function restoreOrgBackfillSnapshot(options: {
   databasePath: string;
   rollbackPath: string;
   expectedCurrentSha256: string;
-}): void {
-  const database = assertSafeDatabasePath(options.databasePath);
+  allowLiveDatabase?: boolean;
+  confirmLiveProcessesStopped?: boolean;
+}): Promise<void> {
+  const database = assertSafeDatabasePath(options.databasePath, options.allowLiveDatabase);
+  const live = isLiveDatabase(database);
+  if (live && !options.confirmLiveProcessesStopped) {
+    throw new Error(
+      'refusing live restore: stop every database holder and pass --confirm-live-processes-stopped',
+    );
+  }
   const rollback = assertSafeDatabasePath(options.rollbackPath);
-  if (fileSha256(database) !== options.expectedCurrentSha256) {
+  const currentSha256 = live ? await snapshotSha256(database) : fileSha256(database);
+  if (currentSha256 !== options.expectedCurrentSha256) {
     throw new Error('refusing rollback: target database drifted after the audited backfill');
   }
   assertIntegrity(rollback);
@@ -157,6 +208,13 @@ export function restoreOrgBackfillSnapshot(options: {
   try {
     copyFileSync(rollback, temporary, fsConstants.COPYFILE_EXCL);
     assertIntegrity(temporary);
+    if (live) {
+      // The explicit confirmation above is mandatory: removing WAL sidecars or
+      // replacing the main inode while any process still holds it would fork
+      // the running fleet onto an unlinked database.
+      rmSync(`${database}-wal`, { force: true });
+      rmSync(`${database}-shm`, { force: true });
+    }
     renameSync(temporary, database);
   } finally {
     if (existsSync(temporary)) rmSync(temporary, { force: true });
@@ -169,15 +227,47 @@ function option(args: string[], name: string): string | undefined {
   return index === -1 ? undefined : args[index + 1];
 }
 
+function options(args: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] !== name) continue;
+    const value = args[index + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
+    values.push(value);
+  }
+  return values;
+}
+
+export function parseNoOrgOverrides(args: string[]): Record<string, { reason: string }> | undefined {
+  const teamNames = options(args, '--intentionally-no-org');
+  if (teamNames.length === 0) return undefined;
+  const reason = option(args, '--no-org-reason');
+  if (!reason?.trim()) {
+    throw new Error('--intentionally-no-org requires --no-org-reason <audit reason>');
+  }
+  const overrides: Record<string, { reason: string }> = {};
+  for (const rawName of teamNames) {
+    const teamName = rawName.trim();
+    if (!teamName) throw new Error('--intentionally-no-org team name must not be empty');
+    if (overrides[teamName]) throw new Error(`duplicate --intentionally-no-org team: ${teamName}`);
+    overrides[teamName] = { reason: reason.trim() };
+  }
+  return overrides;
+}
+
 async function main(args: string[]): Promise<void> {
   const databasePath = option(args, '--database');
   if (!databasePath) throw new Error('--database <absolute path> is required');
   const decidedBy = option(args, '--decided-by') ?? 'org-backfill-cli';
+  const allowLiveDatabase = args.includes('--allow-live-database');
+  const noOrgOverrides = parseNoOrgOverrides(args);
   if (args.includes('--dry-run')) {
     const report = await dryRunOrgBackfill({
       databasePath,
       auditOutputPath: option(args, '--audit-output'),
       decidedBy,
+      allowLiveDatabase,
+      noOrgOverrides,
       acknowledgeSourceDrift: args.includes('--acknowledge-source-drift'),
     });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -189,7 +279,13 @@ async function main(args: string[]): Promise<void> {
     if (!rollbackPath || !expectedCurrentSha256) {
       throw new Error('--restore requires --rollback and --expected-current-sha256');
     }
-    restoreOrgBackfillSnapshot({ databasePath, rollbackPath, expectedCurrentSha256 });
+    await restoreOrgBackfillSnapshot({
+      databasePath,
+      rollbackPath,
+      expectedCurrentSha256,
+      allowLiveDatabase,
+      confirmLiveProcessesStopped: args.includes('--confirm-live-processes-stopped'),
+    });
     return;
   }
   if (!args.includes('--apply')) throw new Error('choose exactly one of --dry-run, --apply, or --restore');
@@ -203,6 +299,8 @@ async function main(args: string[]): Promise<void> {
     rollbackPath,
     auditOutputPath,
     decidedBy,
+    allowLiveDatabase,
+    noOrgOverrides,
     acknowledgeSourceDrift: args.includes('--acknowledge-source-drift'),
   });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

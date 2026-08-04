@@ -148,3 +148,82 @@ none was supplied by the operator, so the three readable no-org sources and two 
 source paths remain correctly blocked for inspection.
 
 Plan defects found: none in commit 3.
+
+## Commit 3 follow-up — all-terminal no-org override gate
+
+Prem explicitly approved `intentionally_no_org` for `all`, `public`, `default`,
+`default2`, and `lab`. The first two retain evidence that no source path existed; the
+other three retain their source paths and hashes and had readable sources with no org
+content. No override conflicted with a resolvable organization.
+
+Gate proof (copy only):
+
+- A fresh 75 MB copy of the prepared snapshot was used. Its pre-apply SHA-256 was
+  `d90fbb490389e287cbeca387cc80907e81d02ca2e4bcbeb09fb984ff63d77925`.
+  No command opened, migrated, or wrote `~/.id-agents/id-agents.db`; this was not a live
+  migration, and commits 4–6 were not started.
+- Override dry-run and apply both classified all nine teams: 4 `normalized`, 5
+  `intentionally_no_org`, 0 `blocked`, with 7 groups and 20 tag assignments. Apply run
+  `a0421baa-309f-4a2d-bb22-bb36cccf82b9` wrote exactly 9 audit rows and 9 state rows,
+  whose classifications agreed team-for-team.
+- With zero blocked teams and one audit row per team, apply passed the post-audit gate and
+  executed the deprecated `teams.config.org` cleanup path. The post-cleanup count was zero;
+  the prepared snapshot also had zero legacy keys, so there was no legacy org value to
+  erase and the cleanup was intentionally a no-op for all nine rows.
+- Fresh normalized-store read-back reproduced every applied semantic hash. The four hashes
+  for `dappa`, `idchain`, `security`, and `tradeagent` exactly matched the earlier commit-3
+  apply audit, including their recursive membership results.
+- Applied-copy SQLite integrity was `ok`. The audited after hash was
+  `357136a2e117ee9a2bdac0ee3b5ba14d08c06e2c360867d7b0be807651a1518a`.
+  Restore then returned the target to the same exact pre-apply hash as the rollback copy,
+  `d90fbb490389e287cbeca387cc80907e81d02ca2e4bcbeb09fb984ff63d77925`,
+  with SQLite integrity still `ok` and no commit-3 tables present in the restored copy.
+
+## Commit 3 live migration — authorized apply
+
+Prem authorized the live migration and the five named `intentionally_no_org`
+decisions. The live-path guard remains default-deny; the new
+`--allow-live-database` flag is an exact opt-in and emits a prominent warning. Because the
+live database uses WAL and had roughly 5 MB of committed WAL pages, live dry-run and
+rollback snapshots use SQLite's online backup API rather than copying only the main file.
+Live restore additionally requires `--confirm-live-processes-stopped`: swapping the main
+inode or removing WAL sidecars while any holder remains open would fork the running fleet.
+
+Pre-apply gates:
+
+- Operator backup
+  `/Users/nxt3d/.id-agents/backups/id-agents-20260804-194029.db` had SHA-256
+  `2bff48a7430fcd2949f4194d600f6b2d2e778ba0ae967f8980fdb9a2c20c3d55`,
+  integrity `ok`, and exact live-at-cutoff teams, agents, news, query, and task counts/maxima,
+  proving that it included committed WAL state.
+- `lsof` identified seven holders of this database: Electron PID 26709 and Node PIDs 974,
+  26847, 36907, 36920, 59503, and 60631. All seven REST-AP endpoints returned HTTP 200
+  before apply. They remained running because the live delta is additive and old builds do
+  not read the new tables.
+- Online-backup dry-run `ff9eb1d0-589c-4fd9-8fb4-231719226717` matched the prepared
+  snapshot team-for-team: 9 teams, 4 `normalized`, 5 `intentionally_no_org`, 0 `blocked`,
+  7 groups, and 20 tag assignments. The four source and semantic hashes were unchanged.
+- Immediately before apply, teams remained 9, agents remained 51, and zero teams carried
+  deprecated `config.org`.
+
+Apply and verification:
+
+- The CLI first created and integrity-checked its own online rollback snapshot at
+  `/Users/nxt3d/.id-agents/backups/id-agents-pre-org-live-20260804-195328.db`; SHA-256
+  `57f87964e73031f02eb598957b5b3c59316520958d50be0850fb6b0d2fe2a2a4`.
+- Apply run `07afa1b5-ee74-402b-b602-1d11985ff383`, decided by `Prem`, produced 4
+  `normalized`, 5 `intentionally_no_org`, 0 `blocked`, 7 groups, 20 tag assignments, 9
+  state rows, and 9 run-specific audit rows. Its online post-apply snapshot hash was
+  `b3001788966ffb674544c1b64986de3cdf33fcffea9b3740875188650d7a9479`.
+- Live SQLite integrity was `ok`; teams remained 9, agents remained 51, and deprecated
+  `config.org` remained absent. Fresh normalized-store reads reproduced semantic hashes
+  `d31929a9…29fa` (dappa), `b9c57163…cb3b` (idchain), `8ff55b1c…e4cf7`
+  (security), and `d73576ec…147a` (tradeagent), exactly matching both snapshot runs.
+- The same seven PIDs still held the database after apply; all seven REST-AP endpoints
+  returned HTTP 200, desktop manager health returned `ok`, and the idchain roster count
+  remained 19 agents / 18 running.
+
+Seniordev independently challenged the WAL snapshot, live-holder count, rollback, and
+decision-provenance assumptions. After the online-backup/restore hardening and verification
+of Prem's explicit five-team ruling, seniordev returned `APPROVE APPLY` and agreed the final
+post-apply gate passed.
