@@ -133,9 +133,32 @@ describe('inter-team destination resolution (commit 7)', () => {
   });
 
   it('shares one availability predicate between routing and processing', () => {
-    expect(isInterTeamAvailable({ status: 'running', deleted_at: null })).toBe(true);
-    expect(isInterTeamAvailable({ status: 'stopped', deleted_at: null })).toBe(false);
-    expect(isInterTeamAvailable({ status: 'running', deleted_at: 5 })).toBe(false);
+    const base = { status: 'running', deleted_at: null, runtime: 'codex', metadata: '{}' };
+    expect(isInterTeamAvailable(base)).toBe(true);
+    expect(isInterTeamAvailable({ ...base, status: 'stopped' })).toBe(false);
+    expect(isInterTeamAvailable({ ...base, deleted_at: 5 })).toBe(false);
     expect(isInterTeamAvailable(null)).toBe(false);
+  });
+
+  it('excludes agent kinds the manager cannot dispatch to', async () => {
+    // A DMZ public-remote runtime and a non-mesh member are both refused by
+    // the delivery path, so acceptance must not promise them work.
+    expect(isInterTeamAvailable({
+      status: 'running', deleted_at: null, runtime: 'public-agent-remote', metadata: '{}',
+    })).toBe(false);
+    expect(isInterTeamAvailable({
+      status: 'running', deleted_at: null, runtime: 'codex',
+      metadata: JSON.stringify({ mesh_member: false }),
+    })).toBe(false);
+
+    const dmz = `agent-${randomUUID()}`;
+    await q(
+      db,
+      `INSERT INTO agents (id, team_id, name, type, model, port, status, created_at, metadata, runtime)
+       VALUES (?, ?, 'dmz-agent', 'virtual', 'external', 0, 'running', ?, '{}', 'public-agent-remote')`,
+      [dmz, teamA, Date.now()],
+    );
+    expect(await resolver.resolveNewSendRecipient(teamA, { kind: 'agent_id', agentId: dmz }))
+      .toEqual({ ok: false, code: 'recipient_unavailable' });
   });
 });

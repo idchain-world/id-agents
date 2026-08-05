@@ -189,6 +189,12 @@ export class InterTeamAcceptanceService {
     //    a committed message must never be re-judged by policy or capacity.
     const known = await this.isKnownSubmission(envelope);
     if (!known && !existing) {
+      // A cold start can only open at position 0. Rejecting here keeps the
+      // resolver out of a request that can never be accepted, so a bogus
+      // continuation cannot harvest recipient-existence errors.
+      if (envelope.position !== 0 || envelope.predecessorMessageId !== null) {
+        return { kind: 'error', code: 'conversation_order_conflict' };
+      }
       // Policy guards new conversations only, and runs before any
       // recipient lookup: a closed team must not learn who was addressed.
       const settings = await query<{ inbound_policy: 'open' | 'closed' }>(

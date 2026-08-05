@@ -328,6 +328,22 @@ describe('inter-team acceptance service (commit 8)', () => {
     expect(saturated).toEqual({ kind: 'error', code: 'receiver_busy' });
   });
 
+  it('rejects a nonzero-position cold start before any recipient lookup', async () => {
+    const spy = vi.spyOn(resolver, 'resolveNewSendRecipient');
+    const outcome = await service.accept({
+      transport: { kind: 'same_manager', originTeamId: originTeam },
+      envelope: envelope({
+        destination: { kind: 'agent_name', agentName: 'nobody-to-probe' },
+        position: 3,
+        predecessorMessageId: 'msg-fabricated',
+      }),
+    });
+    // A bogus continuation must not harvest recipient-existence errors.
+    expect(outcome).toEqual({ kind: 'error', code: 'conversation_order_conflict' });
+    expect(spy).not.toHaveBeenCalled();
+    expect(await q(db, `SELECT id FROM interteam_conversations`)).toHaveLength(0);
+  });
+
   it('rejects an unsupported protocol major before acceptance', async () => {
     const outcome = await service.accept({
       transport: { kind: 'same_manager', originTeamId: originTeam },

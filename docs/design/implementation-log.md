@@ -566,3 +566,49 @@ acceptance-capacity half was already fixed in 04abf13, which crossed with the re
 Suites: processor 14/14, acceptance 13/13, full regression 942 tests across repos, unit,
 inter-team integration, and middleware-adjacent suites; typecheck and build green. No
 schema change; the live database remains untouched.
+
+## Phase C fix-forward round 2 (cto review task review-interteam-phase-c)
+
+Ten items; three had already been fixed in 04abf13/23de4b6, which crossed with the
+review (processor dispatch bound + in-transaction capacity admission; per-recipient
+bound after resolution for both direct variants; cancelled/expired job recovery). The
+rest land here:
+
+- **Processing-capable agent kinds.** `isInterTeamAvailable` now also requires the
+  manager's own delivery path to be able to reach the agent: a `public-agent-remote`
+  runtime (DMZ; manager-proxied traffic forbidden) and a `mesh_member: false` agent are
+  not processing-capable, mirroring the `/talk-to` gate so acceptance never promises
+  work dispatch must refuse. Resolver selects widened to runtime/metadata; predicate
+  and resolver tests added.
+- **Lost-response resubmission, for real.** The prior E2E was a false positive (fresh
+  send, fresh IDs — cto was right). The origin client gains `resubmitSend`, rebuilding
+  the first-position envelope verbatim from caller-held identifiers; send/continue
+  responses now return `firstSubmittedAt` so the caller can hold them; a new
+  `POST /inter-team/resubmit` route exposes it. `resubmit` also enforces the 30-day
+  horizon locally (`resubmission_horizon_exceeded`, origin-local non-frozen). The E2E
+  now proves: identical resubmission → `deduplicated: true`, same message ID, one row;
+  changed body → `idempotency_conflict`; stale timestamp → horizon refusal.
+- **Fetch spy made process-wide.** The E2E now replaces `globalThis.fetch` for the
+  whole suite, so manager-internal fetches are observed too; the no-worker-dial gate is
+  asserted over every fetch in the process, not just the test's own calls.
+- **Force-delete production-wired.** `DELETE /inter-team/config/team?force=true` under
+  the commit-6 operator context resolves outstanding work `owner_force_deleted` and
+  deletes the team through the store's transaction. The E2E first proves a bare DELETE
+  is blocked by the commit-5 trigger, then force-deletes through the route. Structural
+  audit limitation recorded: `event_log` rows cascade with the team, so the removal
+  summary is returned to the operator and logged rather than written to the dying
+  team's audit stream.
+- **Frozen descriptor shape.** The descriptor now carries `protocolVersion`, `nodeId`,
+  `teamId`, and `teamDisplayName` (was `teamName`, missing the pin fields).
+- **Leaf groups enforced.** Roster group names now include only groups with no child
+  groups, for both membership and lead rows, so no parent name leaks hierarchy.
+- **Nonzero-position cold start.** Rejected with `conversation_order_conflict` before
+  any recipient lookup (resolver-spy test), so a fabricated continuation cannot harvest
+  recipient-existence errors.
+- **CLI wired to the executable.** `id-agents interteam send|collect|roster` in
+  `id-agents-cli.ts` uses `InterTeamCli` and prints the product copy. **TUI remains
+  unimplemented — an unresolved scope item against commit 10's written text, escalated
+  to the manager for an authorized scope decision rather than silently dropped.**
+
+Suites: inter-team 139 across repos + both integration files; unit 769; middleware
+regression green; build clean. Live database untouched.

@@ -19,15 +19,34 @@ export interface ResolvableAgentRow {
   name: string;
   status: string;
   deleted_at: number | string | null;
+  runtime: string;
+  metadata: string | Record<string, unknown> | null;
 }
 
 /**
  * The one shared processing-capable/availability predicate. Acceptance-time
  * routing checks ("can this send route right now") and processing-time
  * dispatch use the same definition so the two layers cannot disagree.
+ *
+ * Processing-capable means the manager's own delivery path can hand this
+ * agent work: a `public-agent-remote` runtime lives in the DMZ where
+ * manager-proxied traffic is forbidden, and a non-mesh member is refused by
+ * the same gate `/talk-to` enforces. Excluding them here keeps acceptance
+ * from promising work that dispatch would always refuse.
  */
-export function isInterTeamAvailable(agent: Pick<ResolvableAgentRow, 'status' | 'deleted_at'> | null | undefined): boolean {
-  return !!agent && agent.deleted_at === null && agent.status === 'running';
+export function isInterTeamAvailable(
+  agent: Pick<ResolvableAgentRow, 'status' | 'deleted_at' | 'runtime' | 'metadata'> | null | undefined,
+): boolean {
+  if (!agent || agent.deleted_at !== null || agent.status !== 'running') return false;
+  if (agent.runtime === 'public-agent-remote') return false;
+  const metadata = typeof agent.metadata === 'string'
+    ? safeParse(agent.metadata)
+    : agent.metadata ?? {};
+  return (metadata as Record<string, unknown>)?.mesh_member !== false;
+}
+
+function safeParse(value: string): Record<string, unknown> {
+  try { return JSON.parse(value || '{}'); } catch { return {}; }
 }
 
 export type DestinationTeamResolution =
@@ -74,7 +93,7 @@ export class DestinationResolver {
   async getAgent(agentId: string): Promise<ResolvableAgentRow | null> {
     const result = await query<ResolvableAgentRow>(
       this.db,
-      `SELECT id, team_id, name, status, deleted_at FROM agents WHERE id = ?`,
+      `SELECT id, team_id, name, status, deleted_at, runtime, metadata FROM agents WHERE id = ?`,
       [agentId],
     );
     return result.rows[0] ?? null;
@@ -121,7 +140,7 @@ export class DestinationResolver {
 
     const matches = await query<ResolvableAgentRow>(
       this.db,
-      `SELECT id, team_id, name, status, deleted_at FROM agents
+      `SELECT id, team_id, name, status, deleted_at, runtime, metadata FROM agents
        WHERE team_id = ? AND name = ? AND deleted_at IS NULL
        ORDER BY id`,
       [destinationTeamId, destination.agentName],

@@ -7,6 +7,7 @@
 
 import fetch from 'node-fetch';
 import { pathToFileURL } from 'node:url';
+import { InterTeamCli, INTERTEAM_ADDRESS_HINT } from './cli/interteam-commands.js';
 
 const MANAGER_URL = process.env.ID_MANAGER_URL || 'http://localhost:3100';
 
@@ -209,6 +210,54 @@ async function main() {
         console.log(`✅ Agent stopped: ${id}`);
         break;
 
+      case 'interteam': {
+        const sub = args[1];
+        const team = process.env.ID_TEAM;
+        if (!team) {
+          console.error('interteam commands need ID_TEAM set to your team name');
+          process.exit(1);
+        }
+        const interteam = new InterTeamCli({
+          managerUrl: MANAGER_URL,
+          team,
+          agentId: process.env.ID_AGENT_ID,
+        });
+        if (sub === 'send') {
+          const address = args[2];
+          const message = args[3];
+          if (!address || !message) {
+            console.error('Usage: id-agents interteam send <team:alias[/agent-name]> <message>');
+            console.error(INTERTEAM_ADDRESS_HINT);
+            process.exit(1);
+          }
+          const sent = await interteam.send({ address, body: message });
+          console.log(`✅ ${sent.deduplicated ? 'Already accepted' : 'Accepted'}`);
+          console.log(`   Conversation: ${sent.conversationId}`);
+          console.log(`   Message: ${sent.messageId}`);
+          console.log(`   Collect with: id-agents interteam collect ${sent.conversationId} ${sent.messageId}`);
+        } else if (sub === 'collect') {
+          const conversationId = args[2];
+          const messageId = args[3];
+          if (!conversationId || !messageId) {
+            console.error('Usage: id-agents interteam collect <conversation-id> <message-id>');
+            process.exit(1);
+          }
+          console.log(JSON.stringify(await interteam.collect(conversationId, messageId), null, 2));
+        } else if (sub === 'roster') {
+          const alias = args[2];
+          if (!alias) {
+            console.error('Usage: id-agents interteam roster <alias>');
+            process.exit(1);
+          }
+          console.log(JSON.stringify(await interteam.roster(alias), null, 2));
+        } else {
+          console.error('Usage: id-agents interteam <send|collect|roster> ...');
+          console.error(INTERTEAM_ADDRESS_HINT);
+          process.exit(1);
+        }
+        break;
+      }
+
       default:
         console.log(`
 ID Agents CLI
@@ -226,6 +275,11 @@ Examples:
   id-agents register "helper" https://helper.example.com
   id-agents list
   id-agents stop agent_123
+
+Inter-team (needs ID_TEAM, optionally ID_AGENT_ID):
+  id-agents interteam send <team:alias[/agent-name]> <message>
+  id-agents interteam collect <conversation-id> <message-id>
+  id-agents interteam roster <alias>
 `);
     }
   } catch (error) {

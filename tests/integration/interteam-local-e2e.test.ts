@@ -64,11 +64,15 @@ let originAgentId: string;
 const requestedUrls: string[] = [];
 const dispatchedWork: string[] = [];
 
+// Process-wide recorder: EVERY fetch in this process during the suite is
+// observed — including any the manager makes internally — so the no-worker-
+// dial gate cannot be satisfied by only instrumenting the test's own calls.
 const realFetch = globalThis.fetch;
 function spyFetch(url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) {
   requestedUrls.push(String(url));
   return realFetch(url, init);
 }
+globalThis.fetch = spyFetch as typeof fetch;
 
 function adminHeaders(team: string): Record<string, string> {
   return { 'Content-Type': 'application/json', 'X-Id-Admin': '1', 'X-Id-Team': team };
@@ -170,6 +174,7 @@ beforeAll(async () => {
 }, 30000);
 
 afterAll(async () => {
+  globalThis.fetch = realFetch;
   await stopManager();
   try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
 });
@@ -239,20 +244,71 @@ describe('two teams on one manager', () => {
     const next = await cli.continueConversation(teamConversation, { ask: 'follow-up' });
     expect(next.state).toBe('accepted');
 
-    const resend = await spyFetch(`${baseUrl}/inter-team/send`, {
+    // The lost-response path: a send whose 202 never arrived. The origin
+    // rebuilds the SAME envelope — same IDs, same timestamp, same body —
+    // and resubmits. That must deduplicate, never accept a second time.
+    const original = await spyFetch(`${baseUrl}/inter-team/send`, {
       method: 'POST',
       headers: { ...adminHeaders('origin-team'), 'X-Id-Agent': originAgentId },
-      body: JSON.stringify({ address: 'team:partners', body: { ask: 'team-work' } }),
+      body: JSON.stringify({ address: 'team:partners/dest-worker', body: { ask: 'lost-response' } }),
     });
-    // A NEW send is a new conversation; the lost-response path is a verbatim
-    // envelope resubmission, which the store recognizes by minted message ID.
-    expect(resend.status).toBe(202);
+    expect(original.status).toBe(202);
+    const first = await original.json() as {
+      conversationId: string; messageId: string; firstSubmittedAt: number; deduplicated: boolean;
+    };
+    expect(first.deduplicated).toBe(false);
 
-    const messages = (await db.adapter.query<{ message_id: string }>(
+    const resubmit = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
+      method: 'POST',
+      headers: { ...adminHeaders('origin-team'), 'X-Id-Agent': originAgentId },
+      body: JSON.stringify({
+        address: 'team:partners/dest-worker',
+        body: { ask: 'lost-response' },
+        conversationId: first.conversationId,
+        messageId: first.messageId,
+        firstSubmittedAt: first.firstSubmittedAt,
+      }),
+    });
+    expect(resubmit.status).toBe(202);
+    const replay = await resubmit.json() as { messageId: string; deduplicated: boolean };
+    expect(replay.deduplicated).toBe(true);
+    expect(replay.messageId).toBe(first.messageId);
+
+    const rows = (await db.adapter.query<{ message_id: string }>(
       `SELECT message_id FROM interteam_messages WHERE message_id = ?`,
-      [teamMessage],
+      [first.messageId],
     )).rows;
-    expect(messages).toHaveLength(1);
+    expect(rows).toHaveLength(1);
+
+    // A changed body under the same IDs is a conflict, not a new acceptance.
+    const changed = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
+      method: 'POST',
+      headers: { ...adminHeaders('origin-team'), 'X-Id-Agent': originAgentId },
+      body: JSON.stringify({
+        address: 'team:partners/dest-worker',
+        body: { ask: 'tampered' },
+        conversationId: first.conversationId,
+        messageId: first.messageId,
+        firstSubmittedAt: first.firstSubmittedAt,
+      }),
+    });
+    expect(changed.status).toBe(409);
+    expect(((await changed.json()) as any).error).toBe('idempotency_conflict');
+
+    // Past the 30-day horizon the origin refuses locally.
+    const stale = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
+      method: 'POST',
+      headers: { ...adminHeaders('origin-team'), 'X-Id-Agent': originAgentId },
+      body: JSON.stringify({
+        address: 'team:partners/dest-worker',
+        body: { ask: 'lost-response' },
+        conversationId: first.conversationId,
+        messageId: first.messageId,
+        firstSubmittedAt: first.firstSubmittedAt - 31 * 24 * 60 * 60 * 1000,
+      }),
+    });
+    expect(stale.status).toBe(400);
+    expect(((await stale.json()) as any).error).toBe('resubmission_horizon_exceeded');
   });
 
   it('keeps team work waiting through lead deletion and lets a new lead pick it up', async () => {
@@ -362,8 +418,21 @@ describe('two teams on one manager', () => {
     });
 
     const outstanding = await cli.send({ address: 'team:doomed', body: { ask: 'never-answered' } });
-    const store = new InterteamMessageStore(db.adapter);
-    expect(await store.forceDeleteTeam(doomedTeam)).toBe(true);
+
+    // A normal delete is blocked while work is outstanding (the commit-5
+    // trigger); the operator route resolves the work failed and deletes.
+    await expect(db.adapter.query(`DELETE FROM teams WHERE id = ?`, [doomedTeam]))
+      .rejects.toThrow(/interteam_team_has_active_work/);
+    const force = await spyFetch(`${baseUrl}/inter-team/config/team?force=true`, {
+      method: 'DELETE',
+      headers: adminHeaders('doomed-team'),
+    });
+    expect(force.status).toBe(200);
+    expect(await force.json()).toMatchObject({
+      deleted: true,
+      failureCode: 'owner_force_deleted',
+      outstandingResolvedFailed: 1,
+    });
 
     const row = (await db.adapter.query<{ status: string; failure_code: string }>(
       `SELECT status, failure_code FROM interteam_messages WHERE message_id = ?`,

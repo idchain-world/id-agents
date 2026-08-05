@@ -2,6 +2,7 @@
 
 import type { DbAdapter, QueryResult } from '../db/db-adapter.js';
 import {
+  automaticResubmissionAllowed,
   readRoster,
   rosterReadRateResult,
   type Destination,
@@ -39,14 +40,19 @@ export type OriginSendResult =
       ok: true;
       conversationId: string;
       messageId: string;
+      firstSubmittedAt: number;
       outcome: Extract<AcceptanceOutcome, { kind: 'accepted' | 'deduplicated' }>;
     }
   | { ok: false; code: string };
 
+/** The frozen descriptor projection: nodeId + teamId are the contact pin. */
 export interface TeamDescriptor {
-  alias: string;
-  teamName: string;
+  protocolVersion: string;
+  nodeId: string;
+  teamId: string;
+  teamDisplayName: string;
   inboundPolicy: 'open' | 'closed';
+  alias: string;
   agents: RosterAgent[];
 }
 
@@ -180,7 +186,14 @@ export class InterTeamOriginClient {
     if (input.envelope.originTeamId !== input.context.localTeamId) {
       return { ok: false, code: 'source_context_mismatch' };
     }
-    return this.submit(input.envelope, input.context, input.now ?? Date.now());
+    const now = input.now ?? Date.now();
+    // The 30-day resubmission horizon is the origin's contract obligation:
+    // past it, the receiver may have deleted the terminal row and a retry
+    // could re-execute. Refuse locally rather than trusting the caller.
+    if (!automaticResubmissionAllowed(input.envelope.firstSubmittedAt, now)) {
+      return { ok: false, code: 'resubmission_horizon_exceeded' };
+    }
+    return this.submit(input.envelope, input.context, now);
   }
 
   private async submit(
@@ -198,10 +211,58 @@ export class InterTeamOriginClient {
         ok: true,
         conversationId: envelope.conversationId,
         messageId: envelope.messageId,
+        firstSubmittedAt: envelope.firstSubmittedAt,
         outcome,
       };
     }
     return { ok: false, code: outcome.kind === 'error' ? outcome.code : outcome.reason };
+  }
+
+  /**
+   * Rebuild and resubmit a first-position envelope verbatim after a lost
+   * response. The caller supplies the identifiers and original timestamp its
+   * first attempt returned (or durably saved); an identical rebuild
+   * deduplicates, a divergent one is an idempotency_conflict — never a
+   * second acceptance.
+   */
+  async resubmitSend(input: {
+    context: TrustedLocalSourceContext;
+    alias?: string;
+    contactId?: string;
+    destination: Destination;
+    body: unknown;
+    conversationId: string;
+    messageId: string;
+    firstSubmittedAt: number;
+    now?: number;
+  }): Promise<OriginSendResult> {
+    const resolved = await this.resolveContact(input.context, {
+      alias: input.alias,
+      contactId: input.contactId,
+    });
+    if (!resolved.ok) return resolved;
+    const localNodeId = await this.acceptance.localNodeId();
+    if (resolved.contact.remoteNodeId !== localNodeId) {
+      return { ok: false, code: 'peer_route_unconfigured' };
+    }
+    return this.resubmit({
+      context: input.context,
+      now: input.now,
+      envelope: {
+        protocolVersion: '1.0',
+        originNodeId: localNodeId,
+        originTeamId: input.context.localTeamId,
+        destinationNodeId: resolved.contact.remoteNodeId,
+        destinationTeamId: resolved.contact.remoteTeamId,
+        destination: input.destination,
+        conversationId: input.conversationId,
+        messageId: input.messageId,
+        position: 0,
+        predecessorMessageId: null,
+        firstSubmittedAt: input.firstSubmittedAt,
+        body: input.body,
+      },
+    });
   }
 
   /**
@@ -265,9 +326,12 @@ export class InterTeamOriginClient {
     return {
       ok: true,
       descriptor: {
-        alias: resolved.contact.aliasDisplay,
-        teamName: team.rows[0].name,
+        protocolVersion: '1.0',
+        nodeId: localNodeId,
+        teamId: team.rows[0].id,
+        teamDisplayName: team.rows[0].name,
         inboundPolicy: team.rows[0].inbound_policy,
+        alias: resolved.contact.aliasDisplay,
         agents: roster.agents,
       },
     };
@@ -300,15 +364,20 @@ export class InterTeamOriginClient {
       [teamId],
     );
 
-    // Leaf group names as context only: the member's own groups, never the
-    // tree, never IDs, never a lead hint.
+    // LEAF group names as context only: only groups with no child groups
+    // qualify, so no parent name can be used to reconstruct the hierarchy —
+    // never the tree, never IDs, never a lead hint.
     const memberships = await query<{ agent_id: string; name: string }>(
       this.db,
       `SELECT gm.agent_id, g.name FROM org_group_members gm
-       JOIN org_groups g ON g.id = gm.group_id WHERE gm.team_id = ?
+       JOIN org_groups g ON g.id = gm.group_id
+       WHERE gm.team_id = ?
+         AND NOT EXISTS (SELECT 1 FROM org_groups child WHERE child.parent_group_id = g.id)
        UNION
        SELECT gl.agent_id, g.name FROM org_group_leads gl
-       JOIN org_groups g ON g.id = gl.group_id WHERE gl.team_id = ?`,
+       JOIN org_groups g ON g.id = gl.group_id
+       WHERE gl.team_id = ?
+         AND NOT EXISTS (SELECT 1 FROM org_groups child WHERE child.parent_group_id = g.id)`,
       [teamId, teamId],
     );
     const tags = await query<{ agent_id: string; name: string }>(
@@ -345,7 +414,12 @@ export class InterTeamOriginClient {
         organizationTags: (tagsByAgent.get(agent.id) ?? []).sort(),
         groups: (groupsByAgent.get(agent.id) ?? []).sort(),
         catalog,
-        available: isInterTeamAvailable({ status: agent.status, deleted_at: agent.deleted_at }),
+        available: isInterTeamAvailable({
+          status: agent.status,
+          deleted_at: agent.deleted_at,
+          runtime: agent.runtime,
+          metadata: agent.metadata,
+        }),
         deleted: agent.deleted_at !== null,
       };
     });

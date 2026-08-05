@@ -95,6 +95,7 @@ import {
 import { InterTeamAcceptanceService, type AcceptanceBounds } from './inter-team/acceptance-service.js';
 import { InterTeamOriginClient, INTERTEAM_ADDRESS_HINT } from './inter-team/origin-client.js';
 import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
+import { InterteamMessageStore } from './inter-team/message-store.js';
 import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
@@ -1861,6 +1862,7 @@ export class AgentManagerDb {
       read_rate_limited: 429,
       read_response_too_large: 413,
       peer_route_unconfigured: 503,
+      resubmission_horizon_exceeded: 400,
     };
     res.status(statusByCode[code] ?? 500).json({ error: code });
   }
@@ -2152,6 +2154,7 @@ export class AgentManagerDb {
         res.status(202).json({
           conversationId: result.conversationId,
           messageId: result.messageId,
+          firstSubmittedAt: result.firstSubmittedAt,
           state: result.outcome.status,
           deduplicated: result.outcome.kind === 'deduplicated',
           hint: INTERTEAM_ADDRESS_HINT,
@@ -2160,6 +2163,88 @@ export class AgentManagerDb {
           console.error('[Manager] inter-team processor scan failed:', error));
       } catch (error) {
         this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    // Lost-response recovery: rebuild the original first-position envelope
+    // verbatim and resubmit. Identical -> deduplicated; changed ->
+    // idempotency_conflict; past the 30-day horizon -> refused locally.
+    this.managementApp.post('/inter-team/resubmit', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const parsed = this.parseInterteamSendBody(body);
+        if (!parsed.ok) return this.sendInterteamMessagingError(res, parsed.code);
+        if (
+          typeof body.conversationId !== 'string'
+          || typeof body.messageId !== 'string'
+          || typeof body.firstSubmittedAt !== 'number'
+        ) {
+          return this.sendInterteamMessagingError(res, 'invalid_address');
+        }
+        const result = await this.interteamOrigin.resubmitSend({
+          context,
+          alias: parsed.alias,
+          contactId: parsed.contactId,
+          destination: parsed.destination,
+          body: body.body ?? null,
+          conversationId: body.conversationId,
+          messageId: body.messageId,
+          firstSubmittedAt: body.firstSubmittedAt,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.status(202).json({
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          firstSubmittedAt: result.firstSubmittedAt,
+          state: result.outcome.status,
+          deduplicated: result.outcome.kind === 'deduplicated',
+        });
+        void this.interteamProcessor.scan().catch((error) =>
+          console.error('[Manager] inter-team processor scan failed:', error));
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    // Operator force-delete: resolve a team's outstanding inter-team work
+    // failed (owner_force_deleted) and delete the team in one transaction.
+    // History (conversations, messages, receipts) survives; a later
+    // collection against the deleted owner fails and never retargets. The
+    // audit limitation is structural: event_log rows cascade with the team,
+    // so the removal summary is returned to the operator and logged instead.
+    this.managementApp.delete('/inter-team/config/team', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        if (req.query.force !== 'true') {
+          return res.status(400).json({ error: 'force_confirmation_required' });
+        }
+        const store = new InterteamMessageStore(this.db.adapter);
+        const outstanding = await this.db.adapter.query<{ count: number | string }>(
+          this.db.adapter.dialect === 'sqlite'
+            ? `SELECT COUNT(*) AS count FROM interteam_messages m
+               JOIN interteam_conversations c ON c.id = m.conversation_pk
+               WHERE (c.origin_team_id = ? OR c.destination_team_id = ?)
+                 AND m.status IN ('accepted','processing','unknown')`
+            : `SELECT COUNT(*) AS count FROM interteam_messages m
+               JOIN interteam_conversations c ON c.id = m.conversation_pk
+               WHERE (c.origin_team_id = $1 OR c.destination_team_id = $2)
+                 AND m.status IN ('accepted','processing','unknown')`,
+          [context.localTeamId, context.localTeamId],
+        );
+        const deleted = await store.forceDeleteTeam(context.localTeamId);
+        if (!deleted) return res.status(404).json({ error: 'team_not_found' });
+        const summary = {
+          deleted: true,
+          teamId: context.localTeamId,
+          teamName: context.teamName,
+          outstandingResolvedFailed: Number(outstanding.rows[0]?.count ?? 0),
+          failureCode: 'owner_force_deleted',
+        };
+        console.warn('[Manager] inter-team force-delete:', JSON.stringify(summary));
+        res.json(summary);
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
       }
     });
 
