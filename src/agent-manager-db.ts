@@ -88,7 +88,14 @@ import {
   InterteamOperatorConfigService,
   type OperatorConfigContext,
 } from './inter-team/operator-config.js';
-import { LocalSourceContextError } from './inter-team/local-context.js';
+import {
+  LocalSourceContextError,
+  type TrustedLocalSourceContext,
+} from './inter-team/local-context.js';
+import { InterTeamAcceptanceService, type AcceptanceBounds } from './inter-team/acceptance-service.js';
+import { InterTeamOriginClient, INTERTEAM_ADDRESS_HINT } from './inter-team/origin-client.js';
+import { InterTeamProcessor } from './inter-team/processor.js';
+import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
   DEFAULT_CLOSE_WHEN,
@@ -375,6 +382,10 @@ export class AgentManagerDb {
   private db: Db;
   private orgStore: NormalizedOrgStore;
   private interteamConfig: InterteamOperatorConfigService;
+  private interteamAcceptance: InterTeamAcceptanceService;
+  private interteamOrigin: InterTeamOriginClient;
+  private interteamProcessor: InterTeamProcessor;
+  private interteamTimer: ReturnType<typeof setInterval> | null = null;
   private runningServers: Map<string, AgentRestServer> = new Map(); // key: `${teamId}:${agentId}`
 
   /**
@@ -446,12 +457,19 @@ export class AgentManagerDb {
        * the default (`ID_LIBRARY_ROOT` env, else `<cwd>/configs`, else null).
        */
       libraryRoot?: string | null;
+      /** Override inter-team acceptance bounds (for tests). */
+      interteamBounds?: Partial<AcceptanceBounds>;
     },
   ) {
     this.baseWorkDir = baseWorkDir;
     this.db = db;
     this.orgStore = new NormalizedOrgStore(db.adapter);
     this.interteamConfig = new InterteamOperatorConfigService(db.adapter);
+    this.interteamAcceptance = new InterTeamAcceptanceService(db.adapter, {
+      bounds: opts?.interteamBounds,
+    });
+    this.interteamOrigin = new InterTeamOriginClient(db.adapter, this.interteamAcceptance);
+    this.interteamProcessor = new InterTeamProcessor(db.adapter);
     if (opts?.deliverFn) this.deliverFn = opts.deliverFn;
     if (opts?.healthProbeFn) this.healthProbeFn = opts.healthProbeFn;
     this.libraryRoot =
@@ -1700,7 +1718,12 @@ export class AgentManagerDb {
           // If agent doesn't exist at all, fall through as 'anon'
         }
 
-        (req as any).ctx = { principal: resolvedPrincipal, teamName, teamId };
+        (req as any).ctx = {
+          principal: resolvedPrincipal,
+          teamName,
+          teamId,
+          agentId: resolvedPrincipal === 'agent' ? (agentHeader as string) : undefined,
+        };
         next();
       } catch (err: any) {
         // Invalid team name or other error
@@ -1788,6 +1811,82 @@ export class AgentManagerDb {
     }
     console.error('[Manager] Inter-team operator configuration failed:', error);
     res.status(500).json({ error: 'interteam_config_failed' });
+  }
+
+  /**
+   * Commit-10 caller context for the messaging surface. An agent principal
+   * (X-Id-Agent resolved in the team) or a loopback admin with an explicit
+   * team may act; the derived team is the source team and a body can only
+   * agree with it. No token or capability is involved.
+   */
+  private getInterteamCallerContext(req: express.Request): TrustedLocalSourceContext {
+    const ctx = (req as any).ctx as
+      | { principal: 'admin' | 'agent' | 'anon'; teamId?: string; agentId?: string }
+      | undefined;
+    if (!ctx?.teamId) throw new Error('source_context_required');
+    if (ctx.principal === 'agent') {
+      return { localTeamId: ctx.teamId, principal: 'agent-header', agentId: ctx.agentId ?? null };
+    }
+    if (ctx.principal === 'admin' && this.isTeamExplicit(req)) {
+      return { localTeamId: ctx.teamId, principal: 'operator', agentId: null };
+    }
+    throw new Error('source_context_required');
+  }
+
+  private sendInterteamMessagingError(res: express.Response, code: string): void {
+    const statusByCode: Record<string, number> = {
+      invalid_address: 400,
+      message_too_large: 400,
+      protocol_unsupported: 400,
+      org_data_corrupt: 400,
+      contact_not_found: 404,
+      conversation_not_found: 404,
+      recipient_not_found: 404,
+      target_identity_missing: 404,
+      source_unauthorized: 403,
+      source_context_mismatch: 403,
+      source_context_required: 403,
+      self_node_claim: 403,
+      target_closed: 403,
+      team_lead_unavailable: 409,
+      recipient_unavailable: 409,
+      recipient_ambiguous: 409,
+      idempotency_conflict: 409,
+      conversation_order_conflict: 409,
+      receiver_busy: 429,
+      read_rate_limited: 429,
+      read_response_too_large: 413,
+      peer_route_unconfigured: 503,
+    };
+    res.status(statusByCode[code] ?? 500).json({ error: code });
+  }
+
+  /** Parse the request's destination selection into contact + variant. */
+  private parseInterteamSendBody(body: Record<string, unknown>):
+    | { ok: true; alias?: string; contactId?: string; destination: Destination }
+    | { ok: false; code: 'invalid_address' | 'contact_not_found' } {
+    const contactId = typeof body.contactId === 'string' ? body.contactId : undefined;
+    if (typeof body.address === 'string') {
+      const parsed = parseInterTeamAddress(body.address);
+      if (!parsed.ok) return { ok: false, code: parsed.code };
+      if (typeof body.agentId === 'string') {
+        return {
+          ok: true,
+          alias: parsed.value.contactAlias,
+          destination: { kind: 'agent_id', agentId: body.agentId },
+        };
+      }
+      return { ok: true, alias: parsed.value.contactAlias, destination: parsed.value.destination };
+    }
+    if (contactId) {
+      const destination: Destination = typeof body.agentId === 'string'
+        ? { kind: 'agent_id', agentId: body.agentId }
+        : typeof body.agentName === 'string'
+          ? { kind: 'agent_name', agentName: body.agentName }
+          : { kind: 'team' };
+      return { ok: true, contactId, destination };
+    }
+    return { ok: false, code: 'invalid_address' };
   }
 
   private setupRoutes() {
@@ -1977,6 +2076,101 @@ export class AgentManagerDb {
         res.json(await this.interteamConfig.replaceOrg(context, body));
       } catch (error) {
         this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    // ==================== INTER-TEAM MESSAGING (commit 10) ====================
+    // Origin-side surface. Collection is pull-only and non-consuming: the
+    // origin asks by conversation and message ID; the destination never
+    // connects back, and no envelope or response carries a reply URL.
+    this.managementApp.post('/inter-team/send', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const parsed = this.parseInterteamSendBody(body);
+        if (!parsed.ok) return this.sendInterteamMessagingError(res, parsed.code);
+        const result = await this.interteamOrigin.send({
+          context,
+          alias: parsed.alias,
+          contactId: parsed.contactId,
+          destination: parsed.destination,
+          body: body.body ?? null,
+          requestBody: body,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.status(202).json({
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          state: result.outcome.status,
+          deduplicated: result.outcome.kind === 'deduplicated',
+          hint: INTERTEAM_ADDRESS_HINT,
+        });
+        void this.interteamProcessor.scan().catch((error) =>
+          console.error('[Manager] inter-team processor scan failed:', error));
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    this.managementApp.post('/inter-team/conversations/:conversationId/messages', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const result = await this.interteamOrigin.continueConversation({
+          context,
+          conversationId: req.params.conversationId,
+          body: body.body ?? null,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.status(202).json({
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          state: result.outcome.status,
+          deduplicated: result.outcome.kind === 'deduplicated',
+        });
+        void this.interteamProcessor.scan().catch((error) =>
+          console.error('[Manager] inter-team processor scan failed:', error));
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    this.managementApp.get('/inter-team/conversations/:conversationId/messages/:messageId', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const result = await this.interteamOrigin.collect({
+          context,
+          conversationId: req.params.conversationId,
+          messageId: req.params.messageId,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.json(result.value);
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    this.managementApp.get('/inter-team/descriptor/:alias', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const result = await this.interteamOrigin.describeContact({
+          context,
+          alias: req.params.alias,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.json(result.descriptor);
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    // Operator/test tick: run one processor pass now. Admin only.
+    this.managementApp.post('/inter-team/scan', async (req, res) => {
+      try {
+        if (!this.isAdminRequest(req)) return res.status(403).json({ error: 'operator_context_required' });
+        res.json({ actions: await this.interteamProcessor.scan() });
+      } catch (error) {
+        res.status(500).json({ error: (error as Error).message });
       }
     });
 
@@ -7762,6 +7956,16 @@ export class AgentManagerDb {
         this.handleWebSocketConnection(ws, req);
       });
 
+      // Inter-team recovery + steady-state tick. Startup recovery and the
+      // periodic pass are the same scan; the post-accept kick covers latency.
+      void this.interteamProcessor.scan().catch((error) =>
+        console.error('[Manager] inter-team startup scan failed:', error));
+      this.interteamTimer = setInterval(() => {
+        void this.interteamProcessor.scan().catch((error) =>
+          console.error('[Manager] inter-team processor scan failed:', error));
+      }, 30_000);
+      this.interteamTimer.unref?.();
+
       this.httpServer.listen(port, '127.0.0.1', async () => {
         console.log(`\n🚀 ID Agent Manager (DB-backed)`);
         console.log(`===============================`);
@@ -7885,6 +8089,10 @@ export class AgentManagerDb {
     if (this.wss) {
       try { this.wss.close(); } catch { /* swallow */ }
       this.wss = null;
+    }
+    if (this.interteamTimer) {
+      clearInterval(this.interteamTimer);
+      this.interteamTimer = null;
     }
     if (this.httpServer) {
       await new Promise<void>((res) => this.httpServer!.close(() => res()));

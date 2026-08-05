@@ -450,3 +450,45 @@ not break continuation; deletion differs from team-lead reassignment) plus seria
 ordering, durable-result-before-completed, unknown enter/leave on evidence, stable
 handler failure, and mid-flight deletion. Typecheck green. No schema change; live
 database untouched.
+
+## Commit 10 — result collection, status, roster reads, CLI, local E2E
+
+`src/inter-team/origin-client.ts` is the origin side: contact resolution through the
+commit-6 trusted-context seam (alias team-scoped, cross-owner contact ID
+`source_unauthorized`), durable origin-ID allocation, envelope construction, submission
+through the one commit-8 acceptance service, ordered continuation from the stored
+binding, and origin-only non-consuming collection — a conversation owned by another
+local team is indistinguishable from a missing one. A pin to a foreign node fails
+`peer_route_unconfigured` (local, non-frozen: V1 has no peer routes; commit 14 adds the
+loopback transport). Descriptor/roster reads resolve a contact, are unaffected by
+inbound policy, bound by count/bytes with whole-read failure (never a silent partial),
+per-node rate limited, publish leaf group names as context only (no tree, no IDs, no
+lead hint), and label each whole stored catalog `agent_asserted`. `readRoster` exposes
+no port, endpoint, or URL fields.
+
+Manager routes: `POST /inter-team/send`, `POST/GET
+/inter-team/conversations/:id/messages[/:messageId]`, `GET /inter-team/descriptor/:alias`,
+and an admin-only `POST /inter-team/scan` tick. Caller context is the commit-6 rule:
+agent principal or explicit-team admin; bodies may agree with the derived team, never
+replace it. Acceptance commits before the 202; the processor runs post-response, on a
+30s unref'd timer, and once at startup — recovery is the same scan. `src/cli/
+interteam-commands.ts` is the thin client carrying the exact product copy
+(`INTERTEAM_ADDRESS_HINT`: prefer `team:<alias>`; name and ID are the permitted direct
+paths). Full TUI panels are deferred; recorded as scope, not silently dropped.
+
+E2E (`tests/integration/interteam-local-e2e.test.ts`, 11 tests, real HTTP on a
+file-backed DB): all three destination variants with direct pins verified;
+accepted/processing/completed/failed collection including repeated non-consuming
+reads; non-participant reads identical to unknown-conversation reads; ordered
+continuation; lost-response resubmission returning one row; team-lead deletion holding
+serial-stream work `accepted` until a newly assigned lead picks it up; broken pin
+`target_identity_missing`; capacity `receiver_busy` without dropping accepted work;
+descriptor/roster against open AND closed teams; force-delete of an owner with work
+outstanding (`owner_force_deleted`, later collection `conversation_not_found`); and the
+gate — a full manager stop/start with collection reconstructing identical results from
+durable rows, plus a fetch spy proving every network request in the file targets only
+the manager base URL: no caller dialed a worker. `unknown`-state collection is covered
+at the store/processor layer (commits 5/9 suites). Full regression: 924 tests across
+repos/unit/middleware-adjacent suites plus the E2E, build green. No schema change; the
+live database is untouched and Phase C has not been applied to it. Commit 11 not
+started.
