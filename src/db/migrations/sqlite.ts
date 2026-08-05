@@ -5,6 +5,7 @@ import type { SqliteAdapter } from '../sqlite-adapter.js';
 import { migrateOrgSchemaSqlite } from './org-schema.js';
 import { migrateInterteamFoundationSqlite } from './interteam-foundation.js';
 import { migrateInterteamMessagesSqlite } from './interteam-messages.js';
+import { migrateInterteamFederationSqlite } from './interteam-federation.js';
 
 /** PK (team_id, query_id); nullable agent_id for manager inbox rows. */
 async function migrateQueriesTeamQueryPkSqlite(adapter: SqliteAdapter): Promise<void> {
@@ -566,6 +567,7 @@ export async function migrateSqlite(adapter: SqliteAdapter): Promise<void> {
   await migrateOrgSchemaSqlite(adapter);
   await migrateInterteamFoundationSqlite(adapter);
   await migrateInterteamMessagesSqlite(adapter);
+  await migrateInterteamFederationSqlite(adapter);
 }
 
 /**

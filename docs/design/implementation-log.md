@@ -715,3 +715,48 @@ Verification for this follow-up: all 130 tests in the 13-file inter-team suite p
 under Node 22; `tsc --noEmit` and `git diff --check` pass. Seniordev independently
 returned SHIP after 172 relevant tests and TypeScript verification. All database tests
 used in-memory or temporary SQLite files; no live database was opened or migrated.
+
+## Commit 14 — peer routes and durable outbound state
+
+Phase E begins. Two sequencing corrections from the design review (output/phase-de-review.md)
+are in force here and were recorded before implementation, not applied silently.
+
+`interteam_peer_routes` is node-global: one expected remote node ID as the immutable key, one
+absolute base address as mutable operational data, an enabled flag, and inspection timestamps.
+`normalizePeerBaseUrl` refuses anything that is not an absolute http or https origin, refuses
+embedded credentials because V1 has no application authentication that a userinfo component
+could imply, and refuses query or fragment components. A route naming the local node is refused
+at write time, and a pin equal to the local node never consults routes at all, so same-manager
+delivery cannot be federated by misconfiguration. Routes are written only through the loopback
+operator surface at `/inter-team/config/peer-routes`.
+
+`interteam_outbound_conversations` and `interteam_outbound_submissions` are the origin's own
+durable record. The complete envelope is stored whole, so an identical resubmission needs no
+reconstruction from parts, along with the original protocol version and `firstSubmittedAt`, the
+participant pins, position and predecessor, and an attempt state of not attempted, unknown,
+accepted, or rejected. The conversation head advances only on confirmed acceptance, so an
+unknown outcome cannot move the stream, and `firstUnresolvedSubmission` is what lets a
+continuation refuse to mint past an unresolved earlier submission. No address column exists on
+any of these tables, proven by a test that scans every identity and messaging table for
+address-shaped column names.
+
+Correction 1, adopted: commit 14 declares the `FederationTransport` seam with an unconfigured
+default that opens no socket. Without a seam the gate item "outbound state is committed before a
+transport can observe an attempt" would pass vacuously, because nothing could observe. The test
+injects a spy transport that reads the row at the moment of the call.
+
+Correction 2, adopted: outbound state is recorded for every origin send and continuation, local
+and remote alike. Read literally the design records only before a network byte, which would
+leave these tables with no production writer in this commit and make the origin-index gate item
+testable only against hand-written rows. Uniform recording gives one code path, exercised by the
+existing same-manager suites from the moment it lands.
+
+*Gate:* met. Route keys are node-global and refuse the local node; invalid addresses are refused;
+disabled and missing routes both preserve today's result and a failed request never deletes a
+route; outbound state is committed before the spy transport can observe it; an address change
+leaves identity, contact, conversation, message, receipt, outbound, and attribution rows exactly
+equal; no address column exists on those records; restart preserves the node ID and the stored
+envelope; the origin index works with zero destination rows in the database. Tests: 9 new in
+`tests/repos/interteam-peer-routes-outbound.test.ts`. Full inter-team regression 204 tests across
+21 files, typecheck clean. No federation listener is opened by any process in this commit. Live
+database untouched.

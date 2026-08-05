@@ -22,6 +22,12 @@ import {
 } from './acceptance-service.js';
 import { InterteamFoundationStore, type TeamContact } from './foundation-store.js';
 import { resolveOwnedContact, type TrustedLocalSourceContext } from './local-context.js';
+import { InterTeamOutboundStore } from './outbound-store.js';
+import { PeerRouteStore } from './peer-routes.js';
+import {
+  UNCONFIGURED_FEDERATION_TRANSPORT,
+  type FederationTransport,
+} from './federation-transport.js';
 import { isInterTeamAvailable } from './destination-resolver.js';
 
 /**
@@ -111,6 +117,9 @@ function query<T>(db: DbAdapter, sql: string, params: unknown[] = []): Promise<Q
 
 export class InterTeamOriginClient {
   private readonly store: InterteamMessageStore;
+  private readonly outbound: InterTeamOutboundStore;
+  private readonly routes: PeerRouteStore;
+  private readonly transport: FederationTransport;
   private readonly foundation: InterteamFoundationStore;
   private readonly rosterBounds: { maxAgents: number; maxEncodedBytes: number };
   private readonly conversationListBounds: { maxConversations: number; maxEncodedBytes: number };
@@ -124,8 +133,13 @@ export class InterTeamOriginClient {
       rosterBounds?: { maxAgents: number; maxEncodedBytes: number };
       conversationListBounds?: { maxConversations: number; maxEncodedBytes: number };
       rosterReadsPerMinute?: number;
+      /** Supplied from commit 15 onward; unconfigured means no socket exists. */
+      transport?: FederationTransport;
     } = {},
   ) {
+    this.outbound = new InterTeamOutboundStore(db);
+    this.routes = new PeerRouteStore(db);
+    this.transport = options.transport ?? UNCONFIGURED_FEDERATION_TRANSPORT;
     this.store = new InterteamMessageStore(db);
     this.foundation = new InterteamFoundationStore(db);
     this.rosterBounds = options.rosterBounds ?? DEFAULT_ROSTER_BOUNDS;
@@ -255,9 +269,26 @@ export class InterTeamOriginClient {
       ...envelope,
       senderName: sender?.nameAtSend ?? null,
     };
+
+    // The origin's own durable record comes first, before anything could
+    // observe an attempt. Recording is uniform for local and remote
+    // destinations so the remote path is not a second code path that first
+    // executes in production.
+    await this.outbound.recordSubmission({ envelope: outboundEnvelope, now });
+
     const outcome = await this.acceptance.accept({
       transport: { kind: 'same_manager', originTeamId: context.localTeamId },
       envelope: outboundEnvelope,
+      now,
+    });
+    await this.outbound.recordAttemptOutcome({
+      originNodeId: outboundEnvelope.originNodeId,
+      messageId: outboundEnvelope.messageId,
+      attemptState: outcome.kind === 'accepted' || outcome.kind === 'deduplicated' ? 'accepted' : 'rejected',
+      observedState: outcome.kind === 'accepted' || outcome.kind === 'deduplicated' ? outcome.status : null,
+      diagnostic: outcome.kind === 'error'
+        ? outcome.code
+        : outcome.kind === 'rejected' ? outcome.reason : null,
       now,
     });
     if (outcome.kind === 'accepted') {

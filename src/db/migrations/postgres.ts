@@ -4,6 +4,7 @@ import type { DbAdapter } from '../db-adapter.js';
 import { migrateOrgSchemaPostgres } from './org-schema.js';
 import { migrateInterteamFoundationPostgres } from './interteam-foundation.js';
 import { migrateInterteamMessagesPostgres } from './interteam-messages.js';
+import { migrateInterteamFederationPostgres } from './interteam-federation.js';
 
 export async function migratePostgres(adapter: DbAdapter): Promise<void> {
   // Minimal "migrations" run on startup (idempotent).
@@ -706,6 +707,7 @@ export async function migratePostgres(adapter: DbAdapter): Promise<void> {
   await migrateOrgSchemaPostgres(adapter);
   await migrateInterteamFoundationPostgres(adapter);
   await migrateInterteamMessagesPostgres(adapter);
+  await migrateInterteamFederationPostgres(adapter);
 }
 
 /** Null manager-owned FK columns and delete manager-<team> shadow agent rows. */

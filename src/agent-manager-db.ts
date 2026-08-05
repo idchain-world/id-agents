@@ -100,6 +100,7 @@ import {
 } from './inter-team/origin-client.js';
 import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
 import { InterteamMessageStore } from './inter-team/message-store.js';
+import { PeerRouteStore, PeerRouteError } from './inter-team/peer-routes.js';
 import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
@@ -1782,12 +1783,21 @@ export class AgentManagerDb {
       ? error.code
       : error instanceof OrgValidationError
         ? error.code
-        : err?.message || 'interteam_config_failed';
+        : error instanceof PeerRouteError
+          ? error.code
+          : err?.message || 'interteam_config_failed';
     if (code === 'operator_context_required' || code === 'source_unauthorized' || code === 'agent_team_mismatch') {
       res.status(403).json({ error: code });
       return;
     }
-    if (code === 'team_not_found' || code === 'contact_not_found' || code === 'operator_actor_not_found') {
+    if (code === 'peer_route_invalid') {
+      res.status(400).json({ error: code });
+      return;
+    }
+    if (
+      code === 'team_not_found' || code === 'contact_not_found'
+      || code === 'operator_actor_not_found' || code === 'peer_route_not_found'
+    ) {
       res.status(404).json({ error: code });
       return;
     }
@@ -2135,6 +2145,47 @@ export class AgentManagerDb {
         const context = await this.getInterteamOperatorContext(req);
         const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
         res.json(await this.interteamConfig.replaceOrg(context, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    // ==================== INTER-TEAM PEER ROUTES (commit 14) ====================
+    // Node-global operational configuration, written only here on loopback. A
+    // federation request or response can never create, update, disable, or
+    // suggest a route.
+    this.managementApp.get('/inter-team/config/peer-routes', async (req, res) => {
+      try {
+        await this.getInterteamOperatorContext(req);
+        res.json({ routes: await new PeerRouteStore(this.db.adapter).list() });
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.put('/inter-team/config/peer-routes/:nodeId', async (req, res) => {
+      try {
+        await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const localNodeId = await this.interteamAcceptance.localNodeId();
+        const route = await new PeerRouteStore(this.db.adapter).upsert({
+          nodeId: req.params.nodeId,
+          baseUrl: body.baseUrl as string,
+          enabled: body.enabled === undefined ? undefined : body.enabled === true,
+          localNodeId,
+        });
+        res.json({ route });
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.delete('/inter-team/config/peer-routes/:nodeId', async (req, res) => {
+      try {
+        await this.getInterteamOperatorContext(req);
+        const removed = await new PeerRouteStore(this.db.adapter).remove(req.params.nodeId);
+        if (!removed) return res.status(404).json({ error: 'peer_route_not_found' });
+        res.json({ deleted: true, nodeId: req.params.nodeId });
       } catch (error) {
         this.sendInterteamConfigError(res, error);
       }
@@ -3397,7 +3448,10 @@ export class AgentManagerDb {
             id: team.id,
             name: team.name,
             agentCount: parseInt(agentCount || '0'),
-            createdAt: team.created_at
+            createdAt: team.created_at,
+            // Local operator view only. The federation descriptor deliberately
+            // publishes no lead hint; this is the owner looking at their own fleet.
+            leadAgentId: team.lead_agent_id ?? null
           };
         })
       );
