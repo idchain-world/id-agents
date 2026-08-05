@@ -371,3 +371,25 @@ suite, and left cto's additional tests for a reviewed follow-up. Those supplemen
 add a positive-control audit failure that proves the contact mutation rolls back, plus real
 PostgreSQL 16 parity. The combined commit-4/5/6/org gate passed 90 tests across both
 dialects; the supplementary SQLite service/API gate passed 9 tests.
+
+## Commit 7 — destination union, strict receiver-local resolution
+
+Phase C begun by seniordev as lead (manager dispatch, Prem authorized), pairing with cto
+asynchronously per instruction; review requests sent per commit, not blocking on replies.
+
+`src/inter-team/destination-resolver.ts` resolves a destination team only by the contact
+pin's immutable team ID (`target_identity_missing` otherwise) and recipients only inside
+that team: exact current name (0 matches `recipient_not_found`, >1 `recipient_ambiguous`
+— never most-recent), exact immutable ID with out-of-team and soft-deleted rows both
+`recipient_not_found`, stopped agents `recipient_unavailable`. A team destination checks
+only that it can route right now through the assigned lead (unassigned, deleted, or
+stopped lead all `team_lead_unavailable`) and pins nothing — the message binds to the
+team and re-resolves at processing time; agent destinations return the immutable ID that
+acceptance pins. `isInterTeamAvailable` is the one shared processing-capable/availability
+predicate, exported for commits 8/9 so routing and dispatch cannot disagree.
+
+Tests: 11 in `tests/repos/interteam-destination-resolver.test.ts` covering the full
+design list — valid, unknown, ambiguous, stopped, wrong-team, name-and-ID equivalence,
+rename before/after with stable ID addressing, soft-delete for both variants,
+delete-recreate resolving only the new ID, lead routing, and the shared predicate.
+Typecheck and suite green. No schema change; live database untouched.
