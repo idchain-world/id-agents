@@ -308,6 +308,8 @@ describe('two teams on one manager', () => {
   it('continues the ordered request stream and dedups a lost-response resubmission', async () => {
     const next = await cli.continueConversation(teamConversation, { ask: 'follow-up' });
     expect(next.state).toBe('accepted');
+    expect(next.protocolVersion).toBe('1.0');
+    expect(next.firstSubmittedAt).toEqual(expect.any(Number));
 
     // The lost-response path: a send whose 202 never arrived. The origin
     // rebuilds the SAME envelope — same IDs, same timestamp, same body —
@@ -319,9 +321,14 @@ describe('two teams on one manager', () => {
     });
     expect(original.status).toBe(202);
     const first = await original.json() as {
-      conversationId: string; messageId: string; firstSubmittedAt: number; deduplicated: boolean;
+      conversationId: string;
+      messageId: string;
+      protocolVersion: string;
+      firstSubmittedAt: number;
+      deduplicated: boolean;
     };
     expect(first.deduplicated).toBe(false);
+    expect(first.protocolVersion).toBe('1.0');
 
     const resubmit = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
       method: 'POST',
@@ -331,13 +338,18 @@ describe('two teams on one manager', () => {
         body: { ask: 'lost-response' },
         conversationId: first.conversationId,
         messageId: first.messageId,
+        protocolVersion: first.protocolVersion,
         firstSubmittedAt: first.firstSubmittedAt,
       }),
     });
     expect(resubmit.status).toBe(202);
-    const replay = await resubmit.json() as { messageId: string; deduplicated: boolean };
+    const replay = await resubmit.json() as {
+      messageId: string; protocolVersion: string; firstSubmittedAt: number; deduplicated: boolean;
+    };
     expect(replay.deduplicated).toBe(true);
     expect(replay.messageId).toBe(first.messageId);
+    expect(replay.protocolVersion).toBe(first.protocolVersion);
+    expect(replay.firstSubmittedAt).toBe(first.firstSubmittedAt);
 
     const rows = (await db.adapter.query<{ message_id: string }>(
       `SELECT message_id FROM interteam_messages WHERE message_id = ?`,

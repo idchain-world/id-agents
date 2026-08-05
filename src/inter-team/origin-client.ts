@@ -2,6 +2,7 @@
 
 import type { DbAdapter, QueryResult } from '../db/db-adapter.js';
 import {
+  INTER_TEAM_PROTOCOL_VERSION,
   automaticResubmissionAllowed,
   readRoster,
   rosterReadRateResult,
@@ -81,6 +82,7 @@ export type OriginSendResult =
       ok: true;
       conversationId: string;
       messageId: string;
+      protocolVersion: string;
       firstSubmittedAt: number;
       outcome: Extract<AcceptanceOutcome, { kind: 'accepted' | 'deduplicated' }>;
     }
@@ -170,7 +172,7 @@ export class InterTeamOriginClient {
     const now = input.now ?? Date.now();
     const allocated = await this.store.allocateOriginIds(localNodeId, now);
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: '1.0',
+      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: resolved.contact.remoteNodeId,
@@ -205,7 +207,7 @@ export class InterTeamOriginClient {
         ? { kind: 'agent_name', agentName: binding.destination_name_at_acceptance! }
         : { kind: 'agent_id', agentId: binding.destination_agent_id! };
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: '1.0',
+      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: binding.destination_node_id,
@@ -268,6 +270,7 @@ export class InterTeamOriginClient {
         ok: true,
         conversationId: envelope.conversationId,
         messageId: envelope.messageId,
+        protocolVersion: envelope.protocolVersion,
         firstSubmittedAt: envelope.firstSubmittedAt,
         outcome,
       };
@@ -303,6 +306,8 @@ export class InterTeamOriginClient {
     body: unknown;
     conversationId: string;
     messageId: string;
+    /** Version used for the original attempt; preserves replay identity across upgrades. */
+    protocolVersion?: string;
     firstSubmittedAt: number;
     now?: number;
   }): Promise<OriginSendResult> {
@@ -319,7 +324,7 @@ export class InterTeamOriginClient {
       context: input.context,
       now: input.now,
       envelope: {
-        protocolVersion: '1.0',
+        protocolVersion: input.protocolVersion ?? INTER_TEAM_PROTOCOL_VERSION,
         originNodeId: localNodeId,
         originTeamId: input.context.localTeamId,
         destinationNodeId: resolved.contact.remoteNodeId,
@@ -528,7 +533,7 @@ export class InterTeamOriginClient {
     return {
       ok: true,
       descriptor: {
-        protocolVersion: '1.0',
+        protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
         nodeId: localNodeId,
         teamId: team.rows[0].id,
         teamDisplayName: team.rows[0].name,

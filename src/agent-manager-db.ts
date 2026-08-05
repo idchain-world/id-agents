@@ -2163,6 +2163,7 @@ export class AgentManagerDb {
         res.status(202).json({
           conversationId: result.conversationId,
           messageId: result.messageId,
+          protocolVersion: result.protocolVersion,
           firstSubmittedAt: result.firstSubmittedAt,
           state: result.outcome.status,
           deduplicated: result.outcome.kind === 'deduplicated',
@@ -2187,6 +2188,7 @@ export class AgentManagerDb {
         if (
           typeof body.conversationId !== 'string'
           || typeof body.messageId !== 'string'
+          || (body.protocolVersion !== undefined && typeof body.protocolVersion !== 'string')
           || typeof body.firstSubmittedAt !== 'number'
         ) {
           return this.sendInterteamMessagingError(res, 'invalid_address');
@@ -2199,12 +2201,14 @@ export class AgentManagerDb {
           body: body.body ?? null,
           conversationId: body.conversationId,
           messageId: body.messageId,
+          protocolVersion: body.protocolVersion,
           firstSubmittedAt: body.firstSubmittedAt,
         });
         if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
         res.status(202).json({
           conversationId: result.conversationId,
           messageId: result.messageId,
+          protocolVersion: result.protocolVersion,
           firstSubmittedAt: result.firstSubmittedAt,
           state: result.outcome.status,
           deduplicated: result.outcome.kind === 'deduplicated',
@@ -2270,6 +2274,8 @@ export class AgentManagerDb {
         res.status(202).json({
           conversationId: result.conversationId,
           messageId: result.messageId,
+          protocolVersion: result.protocolVersion,
+          firstSubmittedAt: result.firstSubmittedAt,
           state: result.outcome.status,
           deduplicated: result.outcome.kind === 'deduplicated',
         });

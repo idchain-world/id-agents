@@ -15,6 +15,7 @@ import {
   InterteamMessageStore,
 } from '../../src/inter-team/message-store.js';
 import { InterTeamOriginClient } from '../../src/inter-team/origin-client.js';
+import { INTER_TEAM_PROTOCOL_VERSION } from '../../src/inter-team/protocol.js';
 
 const temporaryRoots: string[] = [];
 const adapters: SqliteAdapter[] = [];
@@ -202,6 +203,59 @@ describe('inter-team origin sender attribution', () => {
       context: { localTeamId: originTeamId, principal: 'operator', agentId: null },
     });
     expect(listed.ok && listed.value.conversations[0].latestMessage?.sender).toBeNull();
+  });
+
+  it('resubmits with the original protocol minor across a runtime version change', async () => {
+    const {
+      db,
+      nodeId,
+      originTeamId,
+      destinationTeamId,
+      destinationAgentId,
+      client,
+    } = await fixture();
+    const originalProtocolVersion = '1.9';
+    expect(originalProtocolVersion).not.toBe(INTER_TEAM_PROTOCOL_VERSION);
+    const conversationId = randomUUID();
+    const messageId = randomUUID();
+    const firstSubmittedAt = 100;
+    const destination = { kind: 'agent_id' as const, agentId: destinationAgentId };
+    const body = { task: 'survive-upgrade' };
+    const context = { localTeamId: originTeamId, principal: 'operator' as const, agentId: null };
+
+    const accepted = await new InterTeamAcceptanceService(db).accept({
+      transport: { kind: 'same_manager', originTeamId },
+      envelope: {
+        protocolVersion: originalProtocolVersion,
+        originNodeId: nodeId,
+        originTeamId,
+        destinationNodeId: nodeId,
+        destinationTeamId,
+        destination,
+        conversationId,
+        messageId,
+        position: 0,
+        predecessorMessageId: null,
+        firstSubmittedAt,
+        body,
+      },
+      now: firstSubmittedAt,
+    });
+    expect(accepted.kind).toBe('accepted');
+
+    const replay = await client.resubmitSend({
+      context,
+      alias: 'partners',
+      destination,
+      body,
+      conversationId,
+      messageId,
+      protocolVersion: originalProtocolVersion,
+      firstSubmittedAt,
+      now: firstSubmittedAt + 1,
+    });
+    expect(replay.ok && replay.outcome.kind).toBe('deduplicated');
+    if (replay.ok) expect(replay.protocolVersion).toBe(originalProtocolVersion);
   });
 
   it('preserves attribution through compaction and removes it with message deletion', async () => {
