@@ -835,3 +835,42 @@ the design itself places outside ID Agents as infrastructure provisioning. The i
 steps exist to prove, address independence, is proven above by moving between two local binds,
 which exercises the same code path over the same rows. Full regression at this commit: 970 tests
 across 76 files, core and TUI builds clean. Live database untouched.
+
+## Commit 16 container gate — now PROVEN
+
+Docker became available through Colima (server 28.4.0, aarch64). The assertions previously
+reported unproven have been executed and pass. `docker compose` is broken on this machine, so
+the harness uses a plain `docker network create` plus `docker run` invocations, which the gate
+does not need compose for.
+
+`tests/docker/Dockerfile` installs `better-sqlite3` and `express` inside the image so the native
+binding is linux/arm64; the host's darwin-arm64 `node_modules` is never copied in, only the
+platform-independent compiled `dist`. `tests/docker/node-entry.mjs` runs the real production
+modules: the listener comes from the shipped `resolveFederationListenerConfig`, the wire from
+`createFederationApp` and `HttpFederationTransport`, so the gate exercises shipped code rather
+than a test reimplementation. Its control surface binds `127.0.0.1`, exactly as the manager
+binds management, which is what makes loopback-only observable from outside the container.
+
+21 of 21 assertions pass, twice in a row, with exit code 0 and no containers, networks, or
+volumes left behind. Verbatim output is in `output/phase-de-container-gate.txt`. Proven: two
+containers on one private bridge network with distinct durable databases and node IDs; the peer
+container cannot reach the management API while it can reach the federation listener B exposed;
+A opened no listener so nothing is exposed there; only A holds a route, pinned to B's node ID; a
+team on A sends to a team on B and B holds exactly one message; A collects B's durable result
+three times with the same answer each time, non-consuming; a dropped acceptance response is not
+reported as success and an identical resubmission is deduplicated with still exactly one
+destination message; B keeps its node identity across `docker restart` and the result is still
+collectable afterwards; a route aimed at a third node that really answers, with its own identity,
+returns `peer_node_mismatch`; B's outbound spy records zero connection attempts; the wildcard
+bind refuses at startup without the override; and a node with no bind reports the listener
+disabled and exposes nothing.
+
+Two harness defects were found and fixed rather than worked around. `docker logs | grep -q`
+trips `pipefail` through SIGPIPE, so log matching now captures first. More usefully, the first
+attempt aimed the substituted route at node A, which has no listener, and correctly got
+`peer_unreachable` rather than `peer_node_mismatch`: proving substitution requires a peer that
+answers with a different identity, so the harness now starts a third node for it.
+
+**Still unproven, and not simulated:** the Tailscale leg of topology portability. It needs a
+second host. The address-independence invariant it exists to prove remains proven locally by
+moving between binds over the same rows, as recorded under commit 16.
