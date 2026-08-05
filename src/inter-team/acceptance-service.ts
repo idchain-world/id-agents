@@ -68,6 +68,14 @@ export class InterTeamAcceptanceService {
   private readonly bounds: AcceptanceBounds;
   private readonly store: InterteamMessageStore;
   private readonly resolver: DestinationResolver;
+  /**
+   * In-process admission queue. Concurrent accepts on one manager serialize
+   * here: SQLite's adapter transaction is not reentrant under interleaved
+   * async callers, and capacity admission must not be judged twice against
+   * the same count. Cross-process Postgres admission additionally takes an
+   * advisory transaction lock inside the store transaction.
+   */
+  private acceptQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly db: DbAdapter,
@@ -88,6 +96,16 @@ export class InterTeamAcceptanceService {
   }
 
   async accept(input: {
+    transport: AcceptanceTransport;
+    envelope: InterTeamRequestEnvelope;
+    now?: number;
+  }): Promise<AcceptanceOutcome> {
+    const run = this.acceptQueue.then(() => this.acceptSerialized(input), () => this.acceptSerialized(input));
+    this.acceptQueue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async acceptSerialized(input: {
     transport: AcceptanceTransport;
     envelope: InterTeamRequestEnvelope;
     now?: number;
@@ -170,22 +188,17 @@ export class InterTeamAcceptanceService {
     // 6. Accepted-duplicate short-circuit before any mutable re-evaluation:
     //    a committed message must never be re-judged by policy or capacity.
     const known = await this.isKnownSubmission(envelope);
-    if (!known) {
-      if (!existing) {
-        // Policy guards new conversations only, and runs before any
-        // recipient lookup: a closed team must not learn who was addressed.
-        const settings = await query<{ inbound_policy: 'open' | 'closed' }>(
-          this.db,
-          `SELECT inbound_policy FROM teams WHERE id = ?`,
-          [envelope.destinationTeamId],
-        );
-        if (settings.rows[0]?.inbound_policy !== 'open') {
-          return { kind: 'error', code: 'target_closed' };
-        }
+    if (!known && !existing) {
+      // Policy guards new conversations only, and runs before any
+      // recipient lookup: a closed team must not learn who was addressed.
+      const settings = await query<{ inbound_policy: 'open' | 'closed' }>(
+        this.db,
+        `SELECT inbound_policy FROM teams WHERE id = ?`,
+        [envelope.destinationTeamId],
+      );
+      if (settings.rows[0]?.inbound_policy !== 'open') {
+        return { kind: 'error', code: 'target_closed' };
       }
-
-      const capacity = await this.capacityResult(envelope, existing?.destination_agent_id ?? null);
-      if (capacity) return { kind: 'error', code: capacity };
     }
 
     // 7-8. Variant resolution and availability, for new conversations only.
@@ -199,25 +212,43 @@ export class InterTeamAcceptanceService {
       );
       if (!recipient.ok) return { kind: 'error', code: recipient.code };
       resolvedAgentId = recipient.kind === 'agent' ? recipient.agentId : null;
-      if (resolvedAgentId && envelope.destination.kind === 'agent_name') {
-        // The per-direct-recipient bound could not run at step 6 for a name
-        // destination because the pinned ID did not exist yet; still pre-accept.
-        const perRecipient = await this.countNonTerminal(
-          `AND m.resolved_agent_id = ?`,
-          [resolvedAgentId],
-        );
-        if (perRecipient >= this.bounds.maxNonTerminalPerDirectRecipient) {
-          return { kind: 'error', code: 'receiver_busy' };
-        }
-      }
     }
 
-    // 9. Durable acceptance. The store transaction re-runs dedup/order checks
-    //    atomically and commits before the transport can return 202.
+    // 9. Durable acceptance. Capacity admission runs INSIDE the store
+    //    transaction, after its dedup/participant/order checks and right
+    //    before the insert, so two concurrent submissions cannot both pass a
+    //    bound that only admits one. Per-direct-recipient bounds use only a
+    //    validated pinned ID — after resolution for new sends, the stored
+    //    binding for continuations — so an invalid target can never leak
+    //    busy-state instead of recipient_not_found. The transaction commits
+    //    before the transport can return 202.
+    const directRecipientId = resolvedAgentId ?? existing?.destination_agent_id ?? null;
     return this.store.acceptRequest({
       envelope,
       resolvedAgentId,
       now: input.now,
+      admission: async (tx) => {
+        if (tx.dialect === 'postgres') {
+          await tx.query(`SELECT pg_advisory_xact_lock(hashtext('interteam_admission'))`);
+        }
+        const total = await this.countNonTerminal(tx, ``, []);
+        if (total >= this.bounds.maxNonTerminalTotal) return 'receiver_busy';
+        const perOrigin = await this.countNonTerminal(
+          tx, `AND m.submitter_node_id = ?`, [envelope.originNodeId],
+        );
+        if (perOrigin >= this.bounds.maxNonTerminalPerOrigin) return 'receiver_busy';
+        const perTeam = await this.countNonTerminal(
+          tx, `AND c.destination_team_id = ?`, [envelope.destinationTeamId],
+        );
+        if (perTeam >= this.bounds.maxNonTerminalPerTeam) return 'receiver_busy';
+        if (directRecipientId) {
+          const perRecipient = await this.countNonTerminal(
+            tx, `AND m.resolved_agent_id = ?`, [directRecipientId],
+          );
+          if (perRecipient >= this.bounds.maxNonTerminalPerDirectRecipient) return 'receiver_busy';
+        }
+        return null;
+      },
     });
   }
 
@@ -237,40 +268,9 @@ export class InterTeamAcceptanceService {
     return Boolean(receipt.rows[0]);
   }
 
-  private async capacityResult(
-    envelope: InterTeamRequestEnvelope,
-    continuationPinnedAgentId: string | null,
-  ): Promise<'receiver_busy' | null> {
-    const total = await this.countNonTerminal(``, []);
-    if (total >= this.bounds.maxNonTerminalTotal) return 'receiver_busy';
-
-    const perOrigin = await this.countNonTerminal(
-      `AND m.submitter_node_id = ?`,
-      [envelope.originNodeId],
-    );
-    if (perOrigin >= this.bounds.maxNonTerminalPerOrigin) return 'receiver_busy';
-
-    const perTeam = await this.countNonTerminal(
-      `AND c.destination_team_id = ?`,
-      [envelope.destinationTeamId],
-    );
-    if (perTeam >= this.bounds.maxNonTerminalPerTeam) return 'receiver_busy';
-
-    const directRecipient = continuationPinnedAgentId
-      ?? (envelope.destination.kind === 'agent_id' ? envelope.destination.agentId : null);
-    if (directRecipient) {
-      const perRecipient = await this.countNonTerminal(
-        `AND m.resolved_agent_id = ?`,
-        [directRecipient],
-      );
-      if (perRecipient >= this.bounds.maxNonTerminalPerDirectRecipient) return 'receiver_busy';
-    }
-    return null;
-  }
-
-  private async countNonTerminal(condition: string, params: unknown[]): Promise<number> {
+  private async countNonTerminal(db: DbAdapter, condition: string, params: unknown[]): Promise<number> {
     const result = await query<{ count: number | string }>(
-      this.db,
+      db,
       `SELECT COUNT(*) AS count
        FROM interteam_messages m
        JOIN interteam_conversations c ON c.id = m.conversation_pk

@@ -492,3 +492,32 @@ at the store/processor layer (commits 5/9 suites). Full regression: 924 tests ac
 repos/unit/middleware-adjacent suites plus the E2E, build green. No schema change; the
 live database is untouched and Phase C has not been applied to it. Commit 11 not
 started.
+
+## Commit 8 fix-forward — atomic capacity admission (cto review findings)
+
+cto's commit-8 review (task review-interteam-acceptance-commit-8) found two defects,
+both confirmed and fixed forward:
+
+1. Capacity admission ran outside the acceptance transaction: concurrent submissions
+   could both pass a bound that admits one (and SQLite's non-reentrant adapter
+   transaction threw under interleaved accepts). Fixed: `acceptRequest` gains an
+   `admission` hook evaluated inside the store transaction after every
+   dedup/participant/order check and immediately before the durable insert; the
+   acceptance service serializes accepts through an in-process queue, and the
+   Postgres path additionally takes `pg_advisory_xact_lock` for cross-process
+   admission. New concurrency test: 6 simultaneous submissions against a bound of 2
+   yield exactly 2 accepted, 4 receiver_busy, 2 rows, no thrown errors.
+
+2. The `agent_id` per-recipient bound was counted before receiver-local team
+   membership validation, leaking busy-state for a wrong-team ID at its limit
+   (reproduced by cto). Fixed: per-direct-recipient bounds now use only a validated
+   pinned ID — post-resolution for new sends, the stored binding for continuations —
+   so a wrong-team ID returns recipient_not_found regardless of backlog. The earlier
+   "agent_name ordering deviation" note is superseded: both direct variants now bound
+   after resolution, inside the transaction. New leak-regression test covers
+   wrong-team-at-limit vs correctly-addressed-at-limit.
+
+Both mis-addressed-code rulings confirmed by cto and kept: destinationNodeId mismatch
+= target_identity_missing; envelope/transport disagreement = transport-layer
+source_context_mismatch, not added to the frozen set. Suites: commit-8 13/13, all
+inter-team repos + E2E 131/131, typecheck green.

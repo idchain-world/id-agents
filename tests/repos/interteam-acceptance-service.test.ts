@@ -281,6 +281,53 @@ describe('inter-team acceptance service (commit 8)', () => {
     expect(await q(db, `SELECT id FROM interteam_messages WHERE status = 'accepted'`)).toHaveLength(1);
   });
 
+  it('admits exactly the bound under concurrent submissions, atomically with acceptance', async () => {
+    const capped = new InterTeamAcceptanceService(db, {
+      resolver,
+      bounds: { maxNonTerminalPerTeam: 2 },
+    });
+    const outcomes = await Promise.all(Array.from({ length: 6 }, () =>
+      capped.accept({
+        transport: { kind: 'same_manager', originTeamId: originTeam },
+        envelope: envelope({ destination: { kind: 'agent_id', agentId: openWorker } }),
+      })));
+    const accepted = outcomes.filter((o) => o.kind === 'accepted');
+    const busy = outcomes.filter((o) => o.kind === 'error' && o.code === 'receiver_busy');
+    expect(accepted).toHaveLength(2);
+    expect(busy).toHaveLength(4);
+    expect(await q(db, `SELECT id FROM interteam_messages`)).toHaveLength(2);
+  });
+
+  it('returns recipient_not_found for a wrong-team agent ID even at its capacity limit', async () => {
+    const foreignAgent = await addAgent(closedTeam, 'busy-foreigner');
+    // Saturate the foreign agent's per-recipient backlog in its own team.
+    await q(db, `UPDATE teams SET inbound_policy = 'open' WHERE id = ?`, [closedTeam]);
+    const tight = new InterTeamAcceptanceService(db, {
+      resolver,
+      bounds: { maxNonTerminalPerDirectRecipient: 1 },
+    });
+    const fill = await tight.accept({
+      transport: { kind: 'same_manager', originTeamId: originTeam },
+      envelope: envelope({ destinationTeamId: closedTeam, destination: { kind: 'agent_id', agentId: foreignAgent } }),
+    });
+    expect(fill).toMatchObject({ kind: 'accepted' });
+
+    // Addressed through the WRONG team, the saturated agent must not leak
+    // busy-state: membership validation precedes any per-recipient bound.
+    const wrongTeam = await tight.accept({
+      transport: { kind: 'same_manager', originTeamId: originTeam },
+      envelope: envelope({ destination: { kind: 'agent_id', agentId: foreignAgent } }),
+    });
+    expect(wrongTeam).toEqual({ kind: 'error', code: 'recipient_not_found' });
+
+    // Correctly addressed, the bound still holds.
+    const saturated = await tight.accept({
+      transport: { kind: 'same_manager', originTeamId: originTeam },
+      envelope: envelope({ destinationTeamId: closedTeam, destination: { kind: 'agent_id', agentId: foreignAgent } }),
+    });
+    expect(saturated).toEqual({ kind: 'error', code: 'receiver_busy' });
+  });
+
   it('rejects an unsupported protocol major before acceptance', async () => {
     const outcome = await service.accept({
       transport: { kind: 'same_manager', originTeamId: originTeam },

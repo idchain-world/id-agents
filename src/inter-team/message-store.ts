@@ -70,7 +70,7 @@ export type AcceptRequestResult =
     }
   | {
       kind: 'error';
-      code: 'idempotency_conflict' | 'conversation_order_conflict' | 'conversation_not_found';
+      code: 'idempotency_conflict' | 'conversation_order_conflict' | 'conversation_not_found' | 'receiver_busy';
     };
 
 export type CollectStoredResult =
@@ -171,6 +171,13 @@ export class InterteamMessageStore {
     envelope: InterTeamRequestEnvelope;
     resolvedAgentId?: string | null;
     now?: number;
+    /**
+     * Capacity admission, evaluated inside the acceptance transaction after
+     * every dedup/participant/order check has passed and immediately before
+     * the durable insert, so concurrent submissions cannot both pass a bound
+     * that only admits one. Returning a code rejects without allocating state.
+     */
+    admission?: (tx: DbAdapter) => Promise<'receiver_busy' | null>;
   }): Promise<AcceptRequestResult> {
     const envelope = input.envelope;
     const comparisonIdentity = recognizedEnvelopeIdentity(envelope);
@@ -285,6 +292,11 @@ export class InterteamMessageStore {
         || conversation.predecessor_message_id !== envelope.predecessorMessageId
       ) {
         return { kind: 'error', code: 'conversation_order_conflict' };
+      }
+
+      if (input.admission) {
+        const rejection = await input.admission(tx);
+        if (rejection) return { kind: 'error', code: rejection };
       }
 
       const messagePk = randomUUID();
