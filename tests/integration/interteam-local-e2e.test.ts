@@ -61,6 +61,7 @@ let destTeamId: string;
 let leadId: string;
 let workerId: string;
 let originAgentId: string;
+let originPeerAgentId: string;
 const requestedUrls: string[] = [];
 const dispatchedWork: string[] = [];
 
@@ -141,6 +142,7 @@ beforeAll(async () => {
   originTeamId = await db.teams.getOrCreateTeamId('origin-team');
   destTeamId = await db.teams.getOrCreateTeamId('dest-team');
   originAgentId = await addAgent(originTeamId, 'origin-caller');
+  originPeerAgentId = await addAgent(originTeamId, 'origin-peer');
   leadId = await addAgent(destTeamId, 'dest-lead');
   workerId = await addAgent(destTeamId, 'dest-worker');
 
@@ -214,6 +216,8 @@ describe('two teams on one manager', () => {
     const conversations = listed.conversations as Array<Record<string, any>>;
     expect(conversations).toHaveLength(3);
     expect(conversations.map((row) => row.conversationId)).toContain(teamConversation);
+    expect(conversations.find((row) => row.conversationId === teamConversation)?.latestMessage.sender)
+      .toEqual({ agentId: originAgentId, nameAtSend: 'origin-caller' });
     expect(conversations.every((row) => row.destination.alias === 'partners')).toBe(true);
     expect(conversations.filter((row) => row.destination.kind !== 'team')
       .every((row) => row.destination.pinnedAgentId === workerId)).toBe(true);
@@ -245,20 +249,47 @@ describe('two teams on one manager', () => {
     // The post-send scan dispatched the team message to the lead already;
     // its linked job is pending, so the state is processing.
     await scanTick();
-    let collected = await cli.collect(teamConversation, teamMessage);
+    // Attribution is not collection authority: another agent in the same
+    // origin team can collect the first agent's message and sees who sent it.
+    const peer = new InterTeamCli({
+      managerUrl: baseUrl,
+      team: 'origin-team',
+      agentId: originPeerAgentId,
+      fetchImpl: spyFetch as typeof fetch,
+    });
+    let collected = await peer.collect(teamConversation, teamMessage);
     expect(collected.state).toBe('processing');
+    expect(collected.sender).toEqual({ agentId: originAgentId, nameAtSend: 'origin-caller' });
 
     await completeLinkedQuery(teamMessage, { report: 'done' });
     await scanTick();
     for (let read = 0; read < 3; read++) {
-      collected = await cli.collect(teamConversation, teamMessage);
+      collected = await peer.collect(teamConversation, teamMessage);
       expect(collected).toMatchObject({
         state: 'completed',
         retention: 'retained',
         result: { report: 'done' },
         resultPresent: true,
+        sender: { agentId: originAgentId, nameAtSend: 'origin-caller' },
       });
     }
+  });
+
+  it('returns null sender attribution for an admin-principal send', async () => {
+    const admin = new InterTeamCli({
+      managerUrl: baseUrl,
+      team: 'origin-team',
+      fetchImpl: spyFetch as typeof fetch,
+    });
+    const sent = await admin.send({ address: 'team:partners/dest-worker', body: { ask: 'admin-send' } });
+    expect(await admin.collect(sent.conversationId, sent.messageId)).toMatchObject({ sender: null });
+    await new InterteamMessageStore(db.adapter).recordFailed({
+      submitterNodeId: (await db.adapter.query<{ node_id: string }>(
+        `SELECT node_id FROM manager_identity`,
+      )).rows[0]!.node_id,
+      messageId: sent.messageId,
+      failureCode: 'test_cleanup',
+    });
   });
 
   it('rejects a non-participant read identically to an unknown conversation', async () => {
@@ -286,9 +317,11 @@ describe('two teams on one manager', () => {
     });
     expect(original.status).toBe(202);
     const first = await original.json() as {
-      conversationId: string; messageId: string; firstSubmittedAt: number; deduplicated: boolean;
+      conversationId: string; messageId: string; protocolVersion: string;
+      firstSubmittedAt: number; deduplicated: boolean;
     };
     expect(first.deduplicated).toBe(false);
+    expect(first.protocolVersion).toBe('1.1');
 
     const resubmit = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
       method: 'POST',
@@ -298,6 +331,7 @@ describe('two teams on one manager', () => {
         body: { ask: 'lost-response' },
         conversationId: first.conversationId,
         messageId: first.messageId,
+        protocolVersion: first.protocolVersion,
         firstSubmittedAt: first.firstSubmittedAt,
       }),
     });

@@ -648,3 +648,52 @@ ran 143 inter-team tests. Final local gate: 72 files / 938 tests across all unit
 repository suites plus every inter-team integration suite, all passing; core and TUI
 builds green; `git diff --check` clean. No schema migration, live-database access,
 push, or result-delivery implementation.
+
+## Phase C follow-up — per-message origin sender attribution
+
+Added a separate `interteam_origin_submissions` persistence surface keyed by origin
+node and message ID. It records the origin team, conversation, immutable sending-agent
+ID, name at send time, and submission timestamp without an agent or receiver-message
+foreign key. The origin writes it only after first durable acceptance with conflict-do-
+nothing semantics; deduplicated retries cannot change attribution. Admin-principal
+sends record null sender fields. The request envelope, descriptor, recognized envelope
+identity, receiver message schema, routing, admission, ordering, and deduplication are
+unchanged.
+
+`GET /inter-team/conversations` now includes `latestMessage.sender`, and by-ID local
+collection decorates the frozen collection result with `sender`. Both return either
+`{agentId,nameAtSend}` or null. Collection authorization remains origin-team scoped:
+the E2E explicitly has a second agent in the same team collect the first agent's
+message. Repository coverage freezes names across rename/deletion, proves per-turn
+attribution, admin null, first-sender retention across a different-agent retry, and
+survival through receipt-only retention, plus idempotent upgrade of a disposable
+Phase B/C SQLite copy. No live database was opened or migrated.
+
+### Wire amendment — publish the name claim, never the ID
+
+Prem reversed the local-only wire decision before finalization. Protocol 1.1 adds an
+optional nullable `senderName` to the request envelope. The origin publishes the same
+name-at-send stored locally, or null for an admin principal with no agent context. The
+immutable agent ID remains exclusively origin-local because it belongs to that node's
+namespace. The receiver persists the value as `claimed_sender_name` and exposes it to
+its local dispatch/audit surface only. It never resolves the claim or consults it for
+routing, admission, ordering, deduplication, capacity, collection, or authority.
+
+This is the first exercised minor-version compatibility extension from commit 1. The
+contract test proves both `1.0 -> 1.1` and `1.1 -> 1.0` compatibility, proves
+`senderName` is omitted from recognized envelope identity, and proves changing it is
+still an identical replay. Therefore an older 1.0 receiver drops the unknown field
+instead of failing; no major bump is required. Receiver persistence is an additive,
+idempotent nullable-column migration proven on a disposable Phase B/C SQLite copy.
+The first real minor bump also exposed that lost-response resubmission had rebuilt
+with the current version even though protocol version participates in comparison
+identity. Send/continue responses now return their exact version, resubmit accepts
+that original value, and a regression test proves a 1.0 acceptance still deduplicates
+after the origin upgrades to 1.1.
+
+Verification: all 126 inter-team tests pass; core and TUI builds pass; seniordev
+independently returned SHIP after 168 relevant tests and `tsc`. The full repository
+run completed 1,364 passing / 60 skipped with one unrelated persistent failure in
+`agents-rebuild-bulk.test.ts` (its concurrent stub assigns the injected first-call
+failure to `second-claude` while the assertion hard-codes `first-claude`). No gate was
+weakened. No live database was opened or migrated.

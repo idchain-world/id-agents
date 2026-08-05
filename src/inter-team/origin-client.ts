@@ -2,15 +2,20 @@
 
 import type { DbAdapter, QueryResult } from '../db/db-adapter.js';
 import {
+  INTER_TEAM_PROTOCOL_VERSION,
   automaticResubmissionAllowed,
   readRoster,
   rosterReadRateResult,
+  type CollectionResult,
   type Destination,
   type InterTeamRequestEnvelope,
   type RosterAgent,
   type RosterAgentInput,
 } from './protocol.js';
-import { InterteamMessageStore, type CollectStoredResult } from './message-store.js';
+import {
+  InterteamMessageStore,
+  type SenderAttribution,
+} from './message-store.js';
 import {
   InterTeamAcceptanceService,
   type AcceptanceOutcome,
@@ -61,6 +66,8 @@ export interface ConversationListEntry {
     acceptedAt: number | null;
     updatedAt: number;
     terminalAt: number | null;
+    /** Origin-local display metadata. Never used as authority. */
+    sender: SenderAttribution | null;
   } | null;
   createdAt: number;
   updatedAt: number;
@@ -75,10 +82,15 @@ export type OriginSendResult =
       ok: true;
       conversationId: string;
       messageId: string;
+      protocolVersion: string;
       firstSubmittedAt: number;
       outcome: Extract<AcceptanceOutcome, { kind: 'accepted' | 'deduplicated' }>;
     }
   | { ok: false; code: string };
+
+export type OriginCollectResult =
+  | { ok: true; value: CollectionResult & { sender: SenderAttribution | null } }
+  | { ok: false; code: 'conversation_not_found' };
 
 /** The frozen descriptor projection: nodeId + teamId are the contact pin. */
 export interface TeamDescriptor {
@@ -164,7 +176,7 @@ export class InterTeamOriginClient {
     const now = input.now ?? Date.now();
     const allocated = await this.store.allocateOriginIds(localNodeId, now);
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: '1.0',
+      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: resolved.contact.remoteNodeId,
@@ -199,7 +211,7 @@ export class InterTeamOriginClient {
         ? { kind: 'agent_name', agentName: binding.destination_name_at_acceptance! }
         : { kind: 'agent_id', agentId: binding.destination_agent_id! };
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: '1.0',
+      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: binding.destination_node_id,
@@ -239,21 +251,57 @@ export class InterTeamOriginClient {
     context: TrustedLocalSourceContext,
     now: number,
   ): Promise<OriginSendResult> {
+    const sender = await this.senderAtSend(context);
+    // Only the human-usable name crosses the node boundary. The immutable ID
+    // remains in the origin-local attribution table because it is meaningful
+    // only within this manager's namespace.
+    const outboundEnvelope: InterTeamRequestEnvelope = {
+      ...envelope,
+      senderName: sender?.nameAtSend ?? null,
+    };
     const outcome = await this.acceptance.accept({
       transport: { kind: 'same_manager', originTeamId: context.localTeamId },
-      envelope,
+      envelope: outboundEnvelope,
       now,
     });
+    if (outcome.kind === 'accepted') {
+      // Attribution is display metadata, never part of acceptance. A failure
+      // here must not turn a durably accepted message into a failed send.
+      await this.store.recordOriginSubmission({
+        originNodeId: outboundEnvelope.originNodeId,
+        originTeamId: outboundEnvelope.originTeamId,
+        conversationId: outboundEnvelope.conversationId,
+        messageId: outboundEnvelope.messageId,
+        sender,
+        now,
+      }).catch((error) => {
+        console.error('[Inter-team] origin sender attribution persistence failed:', error);
+      });
+    }
     if (outcome.kind === 'accepted' || outcome.kind === 'deduplicated') {
       return {
         ok: true,
-        conversationId: envelope.conversationId,
-        messageId: envelope.messageId,
-        firstSubmittedAt: envelope.firstSubmittedAt,
+        conversationId: outboundEnvelope.conversationId,
+        messageId: outboundEnvelope.messageId,
+        protocolVersion: outboundEnvelope.protocolVersion,
+        firstSubmittedAt: outboundEnvelope.firstSubmittedAt,
         outcome,
       };
     }
     return { ok: false, code: outcome.kind === 'error' ? outcome.code : outcome.reason };
+  }
+
+  private async senderAtSend(context: TrustedLocalSourceContext): Promise<SenderAttribution | null> {
+    if (!context.agentId) return null;
+    const result = await query<{ name: string }>(
+      this.db,
+      `SELECT name FROM agents WHERE id = ?`,
+      [context.agentId],
+    );
+    return {
+      agentId: context.agentId,
+      nameAtSend: result.rows[0]?.name ?? null,
+    };
   }
 
   /**
@@ -271,6 +319,8 @@ export class InterTeamOriginClient {
     body: unknown;
     conversationId: string;
     messageId: string;
+    /** Version used for the original attempt; required for byte-stable replay identity across upgrades. */
+    protocolVersion?: string;
     firstSubmittedAt: number;
     now?: number;
   }): Promise<OriginSendResult> {
@@ -287,7 +337,7 @@ export class InterTeamOriginClient {
       context: input.context,
       now: input.now,
       envelope: {
-        protocolVersion: '1.0',
+        protocolVersion: input.protocolVersion ?? INTER_TEAM_PROTOCOL_VERSION,
         originNodeId: localNodeId,
         originTeamId: input.context.localTeamId,
         destinationNodeId: resolved.contact.remoteNodeId,
@@ -311,7 +361,7 @@ export class InterTeamOriginClient {
     context: TrustedLocalSourceContext;
     conversationId: string;
     messageId: string;
-  }): Promise<CollectStoredResult> {
+  }): Promise<OriginCollectResult> {
     const localNodeId = await this.acceptance.localNodeId();
     const binding = await this.ownedConversation(
       localNodeId,
@@ -319,13 +369,21 @@ export class InterTeamOriginClient {
       input.conversationId,
     );
     if (!binding) return { ok: false, code: 'conversation_not_found' };
-    return this.store.collect({
+    const collected = await this.store.collect({
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationTeamId: binding.destination_team_id,
       conversationId: input.conversationId,
       messageId: input.messageId,
     });
+    if (!collected.ok) return collected;
+    return {
+      ok: true,
+      value: {
+        ...collected.value,
+        sender: await this.store.originSender(localNodeId, input.messageId),
+      },
+    };
   }
 
   /**
@@ -366,6 +424,8 @@ export class InterTeamOriginClient {
       latest_accepted_at: number | string | null;
       latest_updated_at: number | string | null;
       latest_terminal_at: number | string | null;
+      latest_sender_agent_id: string | null;
+      latest_sender_name_at_send: string | null;
     }>(
       this.db,
       `WITH latest_candidates AS (
@@ -404,10 +464,15 @@ export class InterTeamOriginClient {
               latest.retention_tier AS latest_retention_tier,
               latest.accepted_at AS latest_accepted_at,
               latest.updated_at AS latest_updated_at,
-              latest.terminal_at AS latest_terminal_at
+              latest.terminal_at AS latest_terminal_at,
+              origin_submission.sender_agent_id AS latest_sender_agent_id,
+              origin_submission.sender_name_at_send AS latest_sender_name_at_send
        FROM interteam_conversations c
        LEFT JOIN latest_ranked latest
          ON latest.conversation_pk = c.id AND latest.row_number = 1
+       LEFT JOIN interteam_origin_submissions origin_submission
+         ON origin_submission.origin_node_id = c.origin_node_id
+        AND origin_submission.message_id = latest.message_id
        WHERE c.origin_node_id = ? AND c.origin_team_id = ?
          ${statePredicate}
        ORDER BY c.updated_at DESC, c.id
@@ -438,6 +503,10 @@ export class InterTeamOriginClient {
           acceptedAt: row.latest_accepted_at === null ? null : Number(row.latest_accepted_at),
           updatedAt: Number(row.latest_updated_at),
           terminalAt: row.latest_terminal_at === null ? null : Number(row.latest_terminal_at),
+          sender: row.latest_sender_agent_id === null ? null : {
+            agentId: row.latest_sender_agent_id,
+            nameAtSend: row.latest_sender_name_at_send,
+          },
         },
         createdAt: Number(row.created_at),
         updatedAt: Number(row.updated_at),
@@ -485,7 +554,7 @@ export class InterTeamOriginClient {
     return {
       ok: true,
       descriptor: {
-        protocolVersion: '1.0',
+        protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
         nodeId: localNodeId,
         teamId: team.rows[0].id,
         teamDisplayName: team.rows[0].name,

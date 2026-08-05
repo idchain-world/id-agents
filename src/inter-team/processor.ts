@@ -43,6 +43,8 @@ export interface DispatchInput {
   handlerAgentId: string;
   localQueryId: string;
   submitterNodeId: string;
+  /** Unverifiable origin claim for receiver-side display/audit only. */
+  claimedSenderName: string | null;
   messageId: string;
   body: unknown;
 }
@@ -56,6 +58,7 @@ interface PendingMessageRow {
   id: string;
   conversation_pk: string;
   submitter_node_id: string;
+  claimed_sender_name: string | null;
   message_id: string;
   position: number;
   recipient_kind: 'team' | 'agent_name' | 'agent_id';
@@ -130,7 +133,8 @@ export class InterTeamProcessor {
     // only when every earlier position in its conversation is terminal.
     const candidates = await query<PendingMessageRow>(
       this.db,
-      `SELECT m.id, m.conversation_pk, m.submitter_node_id, m.message_id, m.position,
+      `SELECT m.id, m.conversation_pk, m.submitter_node_id, m.claimed_sender_name,
+              m.message_id, m.position,
               m.recipient_kind, m.resolved_agent_id, m.request_body, m.status,
               c.destination_team_id
        FROM interteam_messages m
@@ -216,6 +220,7 @@ export class InterTeamProcessor {
         handlerAgentId,
         localQueryId,
         submitterNodeId: message.submitter_node_id,
+        claimedSenderName: message.claimed_sender_name,
         messageId: message.message_id,
         body: message.request_body === null ? null : parseJsonColumn(message.request_body),
       });
@@ -281,6 +286,7 @@ export class InterTeamProcessor {
       handlerAgentId: target.agentId,
       localQueryId,
       submitterNodeId: message.submitter_node_id,
+      claimedSenderName: message.claimed_sender_name,
       messageId: message.message_id,
       body: message.request_body === null ? null : parseJsonColumn(message.request_body),
     });
@@ -317,7 +323,8 @@ export class InterTeamProcessor {
     const actions: ProcessorAction[] = [];
     const inFlight = await query<PendingMessageRow & { local_team_id?: string; local_query_id?: string }>(
       this.db,
-      `SELECT m.id, m.conversation_pk, m.submitter_node_id, m.message_id, m.position,
+      `SELECT m.id, m.conversation_pk, m.submitter_node_id, m.claimed_sender_name,
+              m.message_id, m.position,
               m.recipient_kind, m.resolved_agent_id, m.request_body, m.status,
               c.destination_team_id, p.local_team_id, p.local_query_id
        FROM interteam_messages m

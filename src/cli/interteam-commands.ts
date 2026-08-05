@@ -53,24 +53,41 @@ export class InterTeamCli {
   async send(input: { address: string; body: unknown; agentId?: string }): Promise<{
     conversationId: string;
     messageId: string;
+    protocolVersion: string;
+    firstSubmittedAt: number;
     state: string;
     deduplicated: boolean;
   }> {
     return await this.request('/inter-team/send', {
       method: 'POST',
       body: JSON.stringify({ address: input.address, agentId: input.agentId, body: input.body }),
-    }) as { conversationId: string; messageId: string; state: string; deduplicated: boolean };
+    }) as {
+      conversationId: string;
+      messageId: string;
+      protocolVersion: string;
+      firstSubmittedAt: number;
+      state: string;
+      deduplicated: boolean;
+    };
   }
 
   async continueConversation(conversationId: string, body: unknown): Promise<{
     conversationId: string;
     messageId: string;
+    protocolVersion: string;
+    firstSubmittedAt: number;
     state: string;
   }> {
     return await this.request(`/inter-team/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: 'POST',
       body: JSON.stringify({ body }),
-    }) as { conversationId: string; messageId: string; state: string };
+    }) as {
+      conversationId: string;
+      messageId: string;
+      protocolVersion: string;
+      firstSubmittedAt: number;
+      state: string;
+    };
   }
 
   /** Non-consuming: safe to repeat until the state is terminal. */
