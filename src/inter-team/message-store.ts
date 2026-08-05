@@ -37,6 +37,7 @@ interface MessageRow {
   conversation_pk: string;
   submitter_node_id: string;
   submitter_team_id: string;
+  claimed_sender_name: string | null;
   message_id: string;
   position: number;
   predecessor_message_id: string | null;
@@ -335,18 +336,20 @@ export class InterteamMessageStore {
       await query(
         tx,
         `INSERT INTO interteam_messages
-           (id, conversation_pk, submitter_node_id, submitter_team_id, message_id,
+           (id, conversation_pk, submitter_node_id, submitter_team_id,
+            claimed_sender_name, message_id,
             position, predecessor_message_id, recipient_kind,
             recipient_name_at_acceptance, resolved_agent_id, comparison_identity,
             request_body, status, last_confirmed_status, result_present,
             retention_tier, accepted_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?,
                  'retained', ?, ?)`,
         [
           messagePk,
           conversation.id,
           envelope.originNodeId,
           envelope.originTeamId,
+          typeof envelope.senderName === 'string' ? envelope.senderName : null,
           envelope.messageId,
           envelope.position,
           envelope.predecessorMessageId,

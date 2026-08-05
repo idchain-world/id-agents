@@ -112,13 +112,20 @@ describe('inter-team async processor (commit 9)', () => {
   });
 
   it('creates the durable job link before reporting processing, then completes on a durable result', async () => {
-    const e = envelope({ destination: { kind: 'agent_id', agentId: worker } });
+    const e = envelope({
+      destination: { kind: 'agent_id', agentId: worker },
+      senderName: 'origin-sender',
+    });
     await accept(e);
 
     const actions = await processor.scan();
     expect(actions).toEqual([{ messageId: e.messageId, action: 'dispatched' }]);
     expect(await messageStatus(e.messageId)).toBe('processing');
-    expect(dispatched[0]).toMatchObject({ handlerAgentId: worker, localTeamId: destTeam });
+    expect(dispatched[0]).toMatchObject({
+      handlerAgentId: worker,
+      localTeamId: destTeam,
+      claimedSenderName: 'origin-sender',
+    });
     const jobs = await q(db, `SELECT query_id FROM queries WHERE agent_id = ?`, [worker]);
     expect(jobs).toHaveLength(1);
 

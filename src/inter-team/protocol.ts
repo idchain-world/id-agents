@@ -2,7 +2,7 @@
 
 import { validateName } from '../name-validation.js';
 
-export const INTER_TEAM_PROTOCOL_VERSION = '1.0' as const;
+export const INTER_TEAM_PROTOCOL_VERSION = '1.1' as const;
 export const RESUBMISSION_HORIZON_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type InboundPolicy = 'open' | 'closed';
@@ -102,6 +102,11 @@ export interface ParticipantBinding {
 
 export interface InterTeamRequestEnvelope extends ParticipantBinding {
   protocolVersion: string;
+  /**
+   * Origin-asserted display/audit claim. Agent IDs are node-local and never
+   * cross the wire. Optional so a 1.1 receiver accepts a 1.0 sender.
+   */
+  senderName?: string | null;
   conversationId: string;
   messageId: string;
   position: number;

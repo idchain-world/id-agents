@@ -209,6 +209,9 @@ describe('two teams on one manager', () => {
     )).rows;
     expect(pins.find((p) => p.recipient_kind === 'team')!.resolved_agent_id).toBeNull();
     expect(pins.filter((p) => p.recipient_kind !== 'team').every((p) => p.resolved_agent_id === workerId)).toBe(true);
+    expect((await db.adapter.query<{ claimed_sender_name: string | null }>(
+      `SELECT claimed_sender_name FROM interteam_messages`,
+    )).rows.every((row) => row.claimed_sender_name === 'origin-caller')).toBe(true);
   });
 
   it('lists only the caller team conversations and exposes no bulk payloads', async () => {
@@ -284,6 +287,10 @@ describe('two teams on one manager', () => {
     const listed = await admin.listConversations();
     expect(listed.conversations.find((row) => row.conversationId === sent.conversationId)
       ?.latestMessage.sender).toBeNull();
+    expect((await db.adapter.query<{ claimed_sender_name: string | null }>(
+      `SELECT claimed_sender_name FROM interteam_messages WHERE message_id = ?`,
+      [sent.messageId],
+    )).rows).toEqual([{ claimed_sender_name: null }]);
     expect(await admin.collect(sent.conversationId, sent.messageId)).not.toHaveProperty('sender');
     await new InterteamMessageStore(db.adapter).recordFailed({
       submitterNodeId: (await db.adapter.query<{ node_id: string }>(
@@ -308,7 +315,7 @@ describe('two teams on one manager', () => {
   it('continues the ordered request stream and dedups a lost-response resubmission', async () => {
     const next = await cli.continueConversation(teamConversation, { ask: 'follow-up' });
     expect(next.state).toBe('accepted');
-    expect(next.protocolVersion).toBe('1.0');
+    expect(next.protocolVersion).toBe('1.1');
     expect(next.firstSubmittedAt).toEqual(expect.any(Number));
 
     // The lost-response path: a send whose 202 never arrived. The origin
@@ -328,7 +335,7 @@ describe('two teams on one manager', () => {
       deduplicated: boolean;
     };
     expect(first.deduplicated).toBe(false);
-    expect(first.protocolVersion).toBe('1.0');
+    expect(first.protocolVersion).toBe('1.1');
 
     const resubmit = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
       method: 'POST',

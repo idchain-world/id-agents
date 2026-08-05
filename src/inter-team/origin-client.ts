@@ -248,17 +248,24 @@ export class InterTeamOriginClient {
     now: number,
   ): Promise<OriginSendResult> {
     const sender = await this.senderAtSend(context);
+    // Only the human-usable name crosses the node boundary. The immutable ID
+    // remains in the origin-local attribution table because it is meaningful
+    // only within this manager's namespace.
+    const outboundEnvelope: InterTeamRequestEnvelope = {
+      ...envelope,
+      senderName: sender?.nameAtSend ?? null,
+    };
     const outcome = await this.acceptance.accept({
       transport: { kind: 'same_manager', originTeamId: context.localTeamId },
-      envelope,
+      envelope: outboundEnvelope,
       now,
     });
     if (outcome.kind === 'accepted') {
       // Attribution is display metadata, never part of acceptance. A failure
       // here must not turn a durably accepted message into a failed send.
       await this.store.recordOriginSubmission({
-        nodeId: envelope.originNodeId,
-        messageId: envelope.messageId,
+        nodeId: outboundEnvelope.originNodeId,
+        messageId: outboundEnvelope.messageId,
         sender,
         now,
       }).catch((error) => {
@@ -268,10 +275,10 @@ export class InterTeamOriginClient {
     if (outcome.kind === 'accepted' || outcome.kind === 'deduplicated') {
       return {
         ok: true,
-        conversationId: envelope.conversationId,
-        messageId: envelope.messageId,
-        protocolVersion: envelope.protocolVersion,
-        firstSubmittedAt: envelope.firstSubmittedAt,
+        conversationId: outboundEnvelope.conversationId,
+        messageId: outboundEnvelope.messageId,
+        protocolVersion: outboundEnvelope.protocolVersion,
+        firstSubmittedAt: outboundEnvelope.firstSubmittedAt,
         outcome,
       };
     }

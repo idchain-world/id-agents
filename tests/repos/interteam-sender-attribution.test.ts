@@ -104,6 +104,11 @@ describe('inter-team origin sender attribution', () => {
         sender_name_at_send: 'first-sender',
         created_at: 10,
       }]);
+    expect(await q<{ claimed_sender_name: string | null }>(
+      db,
+      `SELECT claimed_sender_name FROM interteam_messages WHERE message_id = ?`,
+      [first.messageId],
+    )).toEqual([{ claimed_sender_name: 'first-sender' }]);
 
     await db.query(`UPDATE agents SET name = 'renamed-after-send' WHERE id = ?`, [firstAgentId]);
     await db.query(`DELETE FROM agents WHERE id = ?`, [firstAgentId]);
@@ -129,6 +134,11 @@ describe('inter-team origin sender attribution', () => {
       { message_id: first.messageId, sender_agent_id: firstAgentId, sender_name_at_send: 'first-sender' },
       { message_id: next.messageId, sender_agent_id: secondAgentId, sender_name_at_send: 'second-sender' },
     ]);
+    expect(await q<{ claimed_sender_name: string | null }>(
+      db,
+      `SELECT claimed_sender_name FROM interteam_messages WHERE message_id = ?`,
+      [next.messageId],
+    )).toEqual([{ claimed_sender_name: 'second-sender' }]);
 
     const collected = await client.collect({
       context: secondContext,
@@ -180,6 +190,11 @@ describe('inter-team origin sender attribution', () => {
        FROM interteam_origin_submissions WHERE message_id = ?`,
       [first.messageId],
     )).toEqual([{ sender_agent_id: firstAgentId, sender_name_at_send: 'first' }]);
+    expect(await q<{ claimed_sender_name: string | null }>(
+      db,
+      `SELECT claimed_sender_name FROM interteam_messages WHERE message_id = ?`,
+      [first.messageId],
+    )).toEqual([{ claimed_sender_name: 'first' }]);
 
     const admin = await client.send({
       context: { localTeamId: originTeamId, principal: 'operator', agentId: null },
@@ -193,6 +208,11 @@ describe('inter-team origin sender attribution', () => {
        FROM interteam_origin_submissions WHERE message_id = ?`,
       [admin.messageId],
     )).toEqual([{ sender_agent_id: null, sender_name_at_send: null }]);
+    expect(await q<{ claimed_sender_name: string | null }>(
+      db,
+      `SELECT claimed_sender_name FROM interteam_messages WHERE message_id = ?`,
+      [admin.messageId],
+    )).toEqual([{ claimed_sender_name: null }]);
     let listed = await client.listConversations({
       context: { localTeamId: originTeamId, principal: 'operator', agentId: null },
     });
@@ -310,6 +330,7 @@ describe('inter-team origin sender attribution', () => {
     const phase = new SqliteAdapter(phasePath);
     await migrateSqlite(phase);
     await phase.query(`DROP TABLE interteam_origin_submissions`);
+    await phase.query(`ALTER TABLE interteam_messages DROP COLUMN claimed_sender_name`);
     await phase.query(
       `INSERT INTO interteam_origin_allocations (node_id, id_kind, allocated_id, created_at)
        VALUES ('node', 'message', 'sentinel', 1)`,
@@ -327,6 +348,10 @@ describe('inter-team origin sender attribution', () => {
     )).map((row) => row.name)).toEqual([
       'node_id', 'message_id', 'sender_agent_id', 'sender_name_at_send', 'created_at',
     ]);
+    expect((await q<{ name: string }>(
+      upgraded,
+      `SELECT name FROM pragma_table_info('interteam_messages')`,
+    )).map((row) => row.name)).toContain('claimed_sender_name');
     expect(await q<{ allocated_id: string }>(
       upgraded,
       `SELECT allocated_id FROM interteam_origin_allocations WHERE allocated_id = 'sentinel'`,

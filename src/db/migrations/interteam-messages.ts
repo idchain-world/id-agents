@@ -28,6 +28,8 @@ export async function migrateInterteamMessagesSqlite(adapter: SqliteAdapter): Pr
       conversation_pk TEXT NOT NULL REFERENCES interteam_conversations(id) ON DELETE RESTRICT,
       submitter_node_id TEXT NOT NULL,
       submitter_team_id TEXT NOT NULL,
+      -- Unverifiable origin assertion for receiver-side display/audit only.
+      claimed_sender_name TEXT,
       message_id TEXT NOT NULL,
       position INTEGER NOT NULL CHECK (position >= 0),
       predecessor_message_id TEXT,
@@ -145,6 +147,16 @@ export async function migrateInterteamMessagesSqlite(adapter: SqliteAdapter): Pr
       SELECT RAISE(ABORT, 'interteam_team_has_active_work');
     END;
   `);
+
+  // Existing Phase B/C databases already have interteam_messages. CREATE
+  // TABLE IF NOT EXISTS does not grow them, so add the nullable claim
+  // explicitly and idempotently.
+  const messageColumns = await adapter.query<{ name: string }>(
+    `SELECT name FROM pragma_table_info('interteam_messages')`,
+  );
+  if (!messageColumns.rows.some((row) => row.name === 'claimed_sender_name')) {
+    adapter.exec(`ALTER TABLE interteam_messages ADD COLUMN claimed_sender_name TEXT`);
+  }
 }
 
 /** PostgreSQL equivalent of the commit-5 durable messaging schema. */
@@ -173,6 +185,7 @@ export async function migrateInterteamMessagesPostgres(adapter: DbAdapter): Prom
       conversation_pk uuid NOT NULL REFERENCES interteam_conversations(id) ON DELETE RESTRICT,
       submitter_node_id text NOT NULL,
       submitter_team_id text NOT NULL,
+      claimed_sender_name text,
       message_id text NOT NULL,
       position integer NOT NULL CHECK (position >= 0),
       predecessor_message_id text,
@@ -215,6 +228,9 @@ export async function migrateInterteamMessagesPostgres(adapter: DbAdapter): Prom
       UNIQUE(conversation_pk, position)
     )
   `);
+  await adapter.query(
+    `ALTER TABLE interteam_messages ADD COLUMN IF NOT EXISTS claimed_sender_name text`,
+  );
   await adapter.query(`CREATE INDEX IF NOT EXISTS interteam_messages_retention_idx ON interteam_messages(status, retention_tier, compact_after, delete_after)`);
   await adapter.query(`
     CREATE TABLE IF NOT EXISTS interteam_processing (

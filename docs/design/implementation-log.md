@@ -668,12 +668,29 @@ first-sender retention across a different-agent retry, preservation through
 compaction, removal at message deletion, and idempotent upgrade of a disposable Phase
 B/C SQLite copy. No live database was opened or migrated.
 
-Attribution remains origin-local and never enters the wire envelope, receiver message
-state, descriptor, receipt, or collection response. Retention removes it beside the
-message after first preserving the status-only receipt; receipt-backed index rows
-therefore report `sender: null`. A failed post-acceptance attribution write is logged
-and also reads as null rather than changing the already durable acceptance result.
+### Wire amendment — publish the name claim, never the ID
 
-Verification: all 127 inter-team unit, repository, integration, and local E2E tests
-pass; the core TypeScript build passes; `git diff --check` is clean. No live database
-was opened or migrated.
+Prem reversed the local-only wire decision before finalization. Protocol 1.1 adds an
+optional nullable `senderName` to the request envelope. The origin publishes the same
+name-at-send stored locally, or null for an admin principal with no agent context. The
+immutable agent ID remains exclusively origin-local because it belongs to that node's
+namespace. The receiver persists the value as `claimed_sender_name` and exposes it to
+its local dispatch/audit surface only. It never resolves the claim or consults it for
+routing, admission, ordering, deduplication, capacity, collection, or authority.
+
+This is the first exercised minor-version compatibility extension from commit 1. The
+contract test proves both `1.0 -> 1.1` and `1.1 -> 1.0` compatibility, proves
+`senderName` is omitted from recognized envelope identity, and proves changing it is
+still an identical replay. Therefore an older 1.0 receiver drops the unknown field
+instead of failing; no major bump is required. Receiver persistence is an additive,
+idempotent nullable-column migration proven on a disposable Phase B/C SQLite copy.
+The first real minor bump also exposed that lost-response resubmission had rebuilt
+with the current version even though protocol version participates in comparison
+identity. Send/continue responses now return their exact version, resubmit accepts
+that original value, and a regression test proves an earlier-minor acceptance still
+deduplicates after the origin upgrades.
+
+Verification: all 128 inter-team unit, repository, integration, and local E2E tests
+pass; the core TypeScript build passes; `git diff --check` is clean. Seniordev
+independently returned SHIP after 170 relevant tests and `tsc`. No live database was
+opened or migrated.
