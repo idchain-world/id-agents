@@ -80,6 +80,11 @@ export class InterTeamCli {
     ) as Record<string, unknown>;
   }
 
+  async listConversations(state?: 'outstanding' | 'terminal'): Promise<Record<string, unknown>> {
+    const query = state ? `?state=${state}` : '';
+    return await this.request(`/inter-team/conversations${query}`) as Record<string, unknown>;
+  }
+
   async roster(alias: string): Promise<Record<string, unknown>> {
     return await this.request(`/inter-team/descriptor/${encodeURIComponent(alias)}`) as Record<string, unknown>;
   }

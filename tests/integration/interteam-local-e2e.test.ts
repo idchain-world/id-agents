@@ -209,6 +209,38 @@ describe('two teams on one manager', () => {
     expect(pins.filter((p) => p.recipient_kind !== 'team').every((p) => p.resolved_agent_id === workerId)).toBe(true);
   });
 
+  it('lists only the caller team conversations and exposes no bulk payloads', async () => {
+    const listed = await cli.listConversations();
+    const conversations = listed.conversations as Array<Record<string, any>>;
+    expect(conversations).toHaveLength(3);
+    expect(conversations.map((row) => row.conversationId)).toContain(teamConversation);
+    expect(conversations.every((row) => row.destination.alias === 'partners')).toBe(true);
+    expect(conversations.filter((row) => row.destination.kind !== 'team')
+      .every((row) => row.destination.pinnedAgentId === workerId)).toBe(true);
+    expect(JSON.stringify(listed)).not.toContain('team-work');
+    expect(JSON.stringify(listed)).not.toContain('named');
+
+    const outstanding = await cli.listConversations('outstanding');
+    expect((outstanding.conversations as unknown[]).length).toBe(3);
+    const terminal = await cli.listConversations('terminal');
+    expect(terminal.conversations).toEqual([]);
+
+    const nonOwner = new InterTeamCli({
+      managerUrl: baseUrl,
+      team: 'dest-team',
+      agentId: workerId,
+      fetchImpl: spyFetch as typeof fetch,
+    });
+    await expect(nonOwner.listConversations())
+      .resolves.toEqual({ conversations: [] });
+
+    const invalid = await spyFetch(`${baseUrl}/inter-team/conversations?state=completed`, {
+      headers: { ...adminHeaders('origin-team'), 'X-Id-Agent': originAgentId },
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toEqual({ error: 'invalid_conversation_state_filter' });
+  });
+
   it('collects accepted, processing, completed in order, non-consuming across repeated reads', async () => {
     // The post-send scan dispatched the team message to the lead already;
     // its linked job is pending, so the state is processing.

@@ -250,8 +250,19 @@ async function main() {
             process.exit(1);
           }
           console.log(JSON.stringify(await interteam.roster(alias), null, 2));
+        } else if (sub === 'conversations') {
+          const state = args[2];
+          if (state && state !== 'outstanding' && state !== 'terminal') {
+            console.error('Usage: id-agents interteam conversations [outstanding|terminal]');
+            process.exit(1);
+          }
+          console.log(JSON.stringify(
+            await interteam.listConversations(state as 'outstanding' | 'terminal' | undefined),
+            null,
+            2,
+          ));
         } else {
-          console.error('Usage: id-agents interteam <send|collect|roster> ...');
+          console.error('Usage: id-agents interteam <send|collect|conversations|roster> ...');
           console.error(INTERTEAM_ADDRESS_HINT);
           process.exit(1);
         }
@@ -279,6 +290,7 @@ Examples:
 Inter-team (needs ID_TEAM, optionally ID_AGENT_ID):
   id-agents interteam send <team:alias[/agent-name]> <message>
   id-agents interteam collect <conversation-id> <message-id>
+  id-agents interteam conversations [outstanding|terminal]
   id-agents interteam roster <alias>
 `);
     }

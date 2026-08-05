@@ -34,6 +34,41 @@ export const INTERTEAM_ADDRESS_HINT =
 
 export const DEFAULT_ROSTER_BOUNDS = { maxAgents: 200, maxEncodedBytes: 256 * 1024 };
 export const DEFAULT_ROSTER_READS_PER_MINUTE = 60;
+export const DEFAULT_CONVERSATION_LIST_BOUNDS = {
+  maxConversations: 200,
+  maxEncodedBytes: 256 * 1024,
+};
+
+export type ConversationListStateFilter = 'outstanding' | 'terminal';
+
+export interface ConversationListEntry {
+  conversationId: string;
+  destination: {
+    kind: Destination['kind'];
+    nodeId: string;
+    teamId: string;
+    /** Current origin-owned decoration for the pinned node/team, never identity. */
+    alias: string | null;
+    pinnedAgentId: string | null;
+    nameAtAcceptance: string | null;
+  };
+  latestMessage: {
+    messageId: string;
+    position: number;
+    state: 'accepted' | 'processing' | 'completed' | 'failed' | 'unknown';
+    lastConfirmedState: 'accepted' | 'processing' | 'completed' | 'failed';
+    retention: 'retained' | 'compacted' | 'receipt';
+    acceptedAt: number | null;
+    updatedAt: number;
+    terminalAt: number | null;
+  } | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationList {
+  conversations: ConversationListEntry[];
+}
 
 export type OriginSendResult =
   | {
@@ -70,6 +105,7 @@ export class InterTeamOriginClient {
   private readonly store: InterteamMessageStore;
   private readonly foundation: InterteamFoundationStore;
   private readonly rosterBounds: { maxAgents: number; maxEncodedBytes: number };
+  private readonly conversationListBounds: { maxConversations: number; maxEncodedBytes: number };
   private readonly rosterReadsPerMinute: number;
   private readonly rosterReads = new Map<string, { windowStart: number; used: number }>();
 
@@ -78,12 +114,14 @@ export class InterTeamOriginClient {
     private readonly acceptance: InterTeamAcceptanceService,
     options: {
       rosterBounds?: { maxAgents: number; maxEncodedBytes: number };
+      conversationListBounds?: { maxConversations: number; maxEncodedBytes: number };
       rosterReadsPerMinute?: number;
     } = {},
   ) {
     this.store = new InterteamMessageStore(db);
     this.foundation = new InterteamFoundationStore(db);
     this.rosterBounds = options.rosterBounds ?? DEFAULT_ROSTER_BOUNDS;
+    this.conversationListBounds = options.conversationListBounds ?? DEFAULT_CONVERSATION_LIST_BOUNDS;
     this.rosterReadsPerMinute = options.rosterReadsPerMinute ?? DEFAULT_ROSTER_READS_PER_MINUTE;
   }
 
@@ -288,6 +326,127 @@ export class InterTeamOriginClient {
       conversationId: input.conversationId,
       messageId: input.messageId,
     });
+  }
+
+  /**
+   * Origin-team conversation index. This is deliberately an index rather
+   * than bulk collection: it exposes the latest message's state and timing,
+   * but never request bodies, results, or failure detail. Unknown and
+   * non-owner conversations collapse to the same empty result by selecting
+   * only rows owned by the trusted caller's team.
+   */
+  async listConversations(input: {
+    context: TrustedLocalSourceContext;
+    state?: ConversationListStateFilter;
+  }): Promise<
+    | { ok: true; value: ConversationList }
+    | { ok: false; code: 'read_response_too_large' }
+  > {
+    const localNodeId = await this.acceptance.localNodeId();
+    const statePredicate = input.state === 'outstanding'
+      ? `AND latest.status IN ('accepted','processing','unknown')`
+      : input.state === 'terminal'
+        ? `AND latest.status IN ('completed','failed')`
+        : '';
+    const result = await query<{
+      conversation_id: string;
+      destination_node_id: string;
+      destination_team_id: string;
+      destination_kind: Destination['kind'];
+      destination_agent_id: string | null;
+      destination_name_at_acceptance: string | null;
+      current_alias: string | null;
+      created_at: number | string;
+      updated_at: number | string;
+      latest_message_id: string | null;
+      latest_position: number | string | null;
+      latest_status: 'accepted' | 'processing' | 'completed' | 'failed' | 'unknown' | null;
+      latest_last_confirmed_status: 'accepted' | 'processing' | 'completed' | 'failed' | null;
+      latest_retention_tier: 'retained' | 'compacted' | 'receipt' | null;
+      latest_accepted_at: number | string | null;
+      latest_updated_at: number | string | null;
+      latest_terminal_at: number | string | null;
+    }>(
+      this.db,
+      `WITH latest_candidates AS (
+         SELECT conversation_pk, message_id, position, status, last_confirmed_status,
+                retention_tier, accepted_at, updated_at, terminal_at, 0 AS source_rank
+         FROM interteam_messages
+         UNION ALL
+         SELECT conversation_pk, message_id, position, status, last_confirmed_status,
+                'receipt' AS retention_tier, NULL AS accepted_at,
+                terminal_at AS updated_at, terminal_at, 1 AS source_rank
+         FROM interteam_message_receipts
+       ), latest_ranked AS (
+         SELECT latest_candidates.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY conversation_pk
+                  ORDER BY position DESC, source_rank, message_id
+                ) AS row_number
+         FROM latest_candidates
+       )
+       SELECT c.conversation_id, c.destination_node_id, c.destination_team_id,
+              c.destination_kind, c.destination_agent_id,
+              c.destination_name_at_acceptance, c.created_at, c.updated_at,
+              (
+                SELECT tc.alias_display
+                FROM team_contacts tc
+                WHERE tc.local_team_id = c.origin_team_id
+                  AND tc.remote_node_id = c.destination_node_id
+                  AND tc.remote_team_id = c.destination_team_id
+                ORDER BY tc.alias_normalized, tc.id
+                LIMIT 1
+              ) AS current_alias,
+              latest.message_id AS latest_message_id,
+              latest.position AS latest_position,
+              latest.status AS latest_status,
+              latest.last_confirmed_status AS latest_last_confirmed_status,
+              latest.retention_tier AS latest_retention_tier,
+              latest.accepted_at AS latest_accepted_at,
+              latest.updated_at AS latest_updated_at,
+              latest.terminal_at AS latest_terminal_at
+       FROM interteam_conversations c
+       LEFT JOIN latest_ranked latest
+         ON latest.conversation_pk = c.id AND latest.row_number = 1
+       WHERE c.origin_node_id = ? AND c.origin_team_id = ?
+         ${statePredicate}
+       ORDER BY c.updated_at DESC, c.id
+       LIMIT ?`,
+      [localNodeId, input.context.localTeamId, this.conversationListBounds.maxConversations + 1],
+    );
+    if (result.rows.length > this.conversationListBounds.maxConversations) {
+      return { ok: false, code: 'read_response_too_large' };
+    }
+
+    const value: ConversationList = {
+      conversations: result.rows.map((row) => ({
+        conversationId: row.conversation_id,
+        destination: {
+          kind: row.destination_kind,
+          nodeId: row.destination_node_id,
+          teamId: row.destination_team_id,
+          alias: row.current_alias,
+          pinnedAgentId: row.destination_agent_id,
+          nameAtAcceptance: row.destination_name_at_acceptance,
+        },
+        latestMessage: row.latest_message_id === null ? null : {
+          messageId: row.latest_message_id,
+          position: Number(row.latest_position),
+          state: row.latest_status!,
+          lastConfirmedState: row.latest_last_confirmed_status!,
+          retention: row.latest_retention_tier!,
+          acceptedAt: row.latest_accepted_at === null ? null : Number(row.latest_accepted_at),
+          updatedAt: Number(row.latest_updated_at),
+          terminalAt: row.latest_terminal_at === null ? null : Number(row.latest_terminal_at),
+        },
+        createdAt: Number(row.created_at),
+        updatedAt: Number(row.updated_at),
+      })),
+    };
+    if (Buffer.byteLength(JSON.stringify(value), 'utf8') > this.conversationListBounds.maxEncodedBytes) {
+      return { ok: false, code: 'read_response_too_large' };
+    }
+    return { ok: true, value };
   }
 
   /**

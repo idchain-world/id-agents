@@ -612,3 +612,39 @@ rest land here:
 
 Suites: inter-team 139 across repos + both integration files; unit 769; middleware
 regression green; build clean. Live database untouched.
+
+## Phase C follow-up — origin-team conversation index
+
+Added `GET /inter-team/conversations` through the existing trusted local caller
+context. The query selects only conversations pinned to the local manager node and
+the caller's origin team; another team receives only its own list (or an empty list),
+with no by-ID target and no existence leak. Rows expose conversation/timestamp data,
+the immutable destination node/team, destination variant, pinned direct-agent ID and
+accepted name, a best-effort current origin-owned contact alias, and the latest
+message's state/timestamps/retention tier. Request bodies, result payloads, failure
+detail, and failure codes are never selected or returned. Latest state falls back to
+the highest-position status-only receipt after message deletion.
+
+The default is all conversations. `state=outstanding` selects a latest state of
+`accepted|processing|unknown`; `state=terminal` selects `completed|failed`, including
+receipt-backed terminal state. Each selected read has a 200-conversation and 256 KiB
+encoded-response cap. LIMIT max+1 detects count overflow, and either overflow returns
+`read_response_too_large` for the whole read. There is no pagination or partial
+response. The CLI exposes `id-agents interteam conversations
+[outstanding|terminal]`.
+
+cto and seniordev agreed not to deliver completed payloads or notifications to an
+origin agent in V1. Conversations bind to an origin team, not a sender agent, so there
+is no correct single recipient after the sender stops; copying payloads into news
+would also create a second source of truth and retention domain. The approved contract
+is list-plus-collect polling only. A status-only team-inbox nudge remains a possible
+future UX change if measured polling cost justifies it; it was not implemented.
+
+Verification: new SQLite/Postgres-parity repository coverage for owner isolation,
+other-node exclusion, receipt fallback, state filters, deterministic order, payload
+exclusion, and whole-read count/byte failures; local E2E covers the route, CLI,
+non-owner empty result, and invalid filter. seniordev independently returned SHIP and
+ran 143 inter-team tests. Final local gate: 72 files / 938 tests across all unit and
+repository suites plus every inter-team integration suite, all passing; core and TUI
+builds green; `git diff --check` clean. No schema migration, live-database access,
+push, or result-delivery implementation.

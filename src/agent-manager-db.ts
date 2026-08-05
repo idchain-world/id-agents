@@ -93,7 +93,11 @@ import {
   type TrustedLocalSourceContext,
 } from './inter-team/local-context.js';
 import { InterTeamAcceptanceService, type AcceptanceBounds } from './inter-team/acceptance-service.js';
-import { InterTeamOriginClient, INTERTEAM_ADDRESS_HINT } from './inter-team/origin-client.js';
+import {
+  InterTeamOriginClient,
+  INTERTEAM_ADDRESS_HINT,
+  type ConversationListStateFilter,
+} from './inter-team/origin-client.js';
 import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
 import { InterteamMessageStore } from './inter-team/message-store.js';
 import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
@@ -460,6 +464,8 @@ export class AgentManagerDb {
       libraryRoot?: string | null;
       /** Override inter-team acceptance bounds (for tests). */
       interteamBounds?: Partial<AcceptanceBounds>;
+      /** Override the origin-team conversation-index bounds (for tests). */
+      interteamConversationListBounds?: { maxConversations: number; maxEncodedBytes: number };
       /** Override inter-team work delivery (for tests). */
       interteamDispatchFn?: (input: InterTeamDispatchInput) => Promise<void>;
     },
@@ -471,7 +477,9 @@ export class AgentManagerDb {
     this.interteamAcceptance = new InterTeamAcceptanceService(db.adapter, {
       bounds: opts?.interteamBounds,
     });
-    this.interteamOrigin = new InterTeamOriginClient(db.adapter, this.interteamAcceptance);
+    this.interteamOrigin = new InterTeamOriginClient(db.adapter, this.interteamAcceptance, {
+      conversationListBounds: opts?.interteamConversationListBounds,
+    });
     this.interteamProcessor = new InterTeamProcessor(db.adapter, {
       dispatchFn: opts?.interteamDispatchFn ?? ((input) => this.deliverInterteamWork(input)),
     });
@@ -1841,6 +1849,7 @@ export class AgentManagerDb {
   private sendInterteamMessagingError(res: express.Response, code: string): void {
     const statusByCode: Record<string, number> = {
       invalid_address: 400,
+      invalid_conversation_state_filter: 400,
       message_too_large: 400,
       protocol_unsupported: 400,
       org_data_corrupt: 400,
@@ -2278,6 +2287,24 @@ export class AgentManagerDb {
           context,
           conversationId: req.params.conversationId,
           messageId: req.params.messageId,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.json(result.value);
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
+    this.managementApp.get('/inter-team/conversations', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const requestedState = typeof req.query.state === 'string' ? req.query.state : undefined;
+        if (requestedState !== undefined && requestedState !== 'outstanding' && requestedState !== 'terminal') {
+          return this.sendInterteamMessagingError(res, 'invalid_conversation_state_filter');
+        }
+        const result = await this.interteamOrigin.listConversations({
+          context,
+          state: requestedState as ConversationListStateFilter | undefined,
         });
         if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
         res.json(result.value);
