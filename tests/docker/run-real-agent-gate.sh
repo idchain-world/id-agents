@@ -127,11 +127,11 @@ fi
 
 echo "== a real claude-code-cli agent on each node =="
 SPAWN_B=$(mgmt_team "$B" beta-team POST /agents/spawn '{"name":"answerer","runtime":"claude-code-cli","local":true}')
-B_AGENT=$(printf '%s' "$SPAWN_B" | jqf 'j.id')
+B_AGENT="$(printf '%s' "$SPAWN_B" | jqf 'j.id')"
 check "node B spawned a claude-code-cli agent" "$(printf '%s' "$SPAWN_B" | jqf 'j.runtime')" "claude-code-cli"
 
 SPAWN_A=$(mgmt_team "$A" alpha-team POST /agents/spawn '{"name":"asker","runtime":"claude-code-cli","local":true}')
-A_AGENT=$(printf '%s' "$SPAWN_A" | jqf 'j.id')
+A_AGENT="$(printf '%s' "$SPAWN_A" | jqf 'j.id')"
 check "node A spawned a claude-code-cli agent" "$(printf '%s' "$SPAWN_A" | jqf 'j.runtime')" "claude-code-cli"
 
 # `POST /agents/spawn` registers a local agent; the production launcher that
@@ -163,7 +163,7 @@ LEAD=$(mgmt_team "$B" beta-team PUT /inter-team/config/lead "$LEAD_BODY")
 check "node B assigned its real agent as team lead" "$(printf '%s' "$LEAD" | jqf 'j.settings.leadAgentId')" "$B_AGENT"
 check "node B's inbound policy is open" "$(mgmt_team "$B" beta-team GET /inter-team/config | jqf 'j.settings.inboundPolicy')" "open"
 
-B_TEAM=$(mgmt_team "$B" beta-team GET /inter-team/config | jqf 'j.settings.teamId')
+B_TEAM="$(mgmt_team "$B" beta-team GET /inter-team/config | jqf 'j.settings.teamId')"
 echo "== node A points at node B =="
 ROUTE_BODY=$(node -e 'process.stdout.write(JSON.stringify({baseUrl:process.argv[1]}))' "http://beta:$FED_PORT")
 ROUTE=$(mgmt_team "$A" alpha-team PUT "/inter-team/config/peer-routes/$B_NODE" "$ROUTE_BODY")
@@ -176,8 +176,8 @@ echo "== the real question crosses the node boundary =="
 SEND_BODY=$(node -e 'process.stdout.write(JSON.stringify({address:"team:beta",body:process.argv[1]}))' "$QUESTION")
 SEND=$(mgmt_team "$A" alpha-team POST /inter-team/send "$SEND_BODY" "$A_AGENT")
 printf 'SEND_RESPONSE: %s\n' "$(printf '%s' "$SEND" | head -c 300)"
-CONV=$(printf '%s' "$SEND" | jqf 'j.conversationId')
-MSG=$(printf '%s' "$SEND" | jqf 'j.messageId')
+CONV="$(printf '%s' "$SEND" | jqf 'j.conversationId')"
+MSG="$(printf '%s' "$SEND" | jqf 'j.messageId')"
 check "node A accepted the send for delivery" "$(printf '%s' "$SEND" | jqf 'j.state')" "accepted"
 [ -n "$CONV" ] && ok "the conversation was allocated on node A" || bad "conversation allocated" "$SEND"
 
@@ -185,7 +185,7 @@ echo "== node B's agent answers, and node A collects it =="
 STATE=""
 for _ in $(seq 1 120); do
   COLLECTED=$(mgmt_team "$A" alpha-team GET "/inter-team/conversations/$CONV/messages/$MSG")
-  STATE=$(printf '%s' "$COLLECTED" | jqf 'j.state')
+  STATE="$(printf '%s' "$COLLECTED" | jqf 'j.state')"
   [ "$STATE" = "completed" ] && break
   [ "$STATE" = "failed" ] && break
   sleep 3
@@ -203,12 +203,12 @@ if [ "$STATE" != "completed" ]; then
   docker exec "$B" sh -c 'tail -12 /tmp/answerer.log' 2>/dev/null | head -14
 fi
 check "node A collected a completed result from node B" "$STATE" "completed"
-ANSWER=$(printf '%s' "$COLLECTED" | jqf 'typeof j.result === "string" ? j.result : JSON.stringify(j.result)')
+ANSWER="$(printf '%s' "$COLLECTED" | jqf 'typeof j.result === "string" ? j.result : JSON.stringify(j.result)')"
 printf 'ANSWER_FROM_REMOTE_AGENT: %s\n' "$ANSWER"
 contains "the remote agent answered the question correctly" "$ANSWER" "Paris"
 
 # Repeated collection is non-consuming, over the real path.
-AGAIN=$(mgmt_team "$A" alpha-team GET "/inter-team/conversations/$CONV/messages/$MSG" | jqf 'j.state')
+AGAIN="$(mgmt_team "$A" alpha-team GET "/inter-team/conversations/$CONV/messages/$MSG" | jqf 'j.state')"
 check "repeated collection is non-consuming" "$AGAIN" "completed"
 
 echo "== the answer came from the agent, not from a test endpoint =="
@@ -225,7 +225,7 @@ JOB=$(docker exec "$B" node -e "
 check "the durable job was handled by the spawned agent" "$(printf '%s' "$JOB" | jqf 'j.handler')" "$B_AGENT"
 check "the job row is owned by that agent" "$(printf '%s' "$JOB" | jqf 'j.row && j.row.agent_id')" "$B_AGENT"
 check "the job completed in B's database" "$(printf '%s' "$JOB" | jqf 'j.row && j.row.status')" "completed"
-PROMPT=$(printf '%s' "$JOB" | jqf 'j.row && j.row.prompt')
+PROMPT="$(printf '%s' "$JOB" | jqf 'j.row && j.row.prompt')"
 contains "the agent's prompt carried the production unverified-sender frame" "$PROMPT" "unverified]"
 contains "the frame names the sending agent on node A" "$PROMPT" "asker"
 contains "the agent's prompt carried the question A actually sent" "$PROMPT" "capital of France"
