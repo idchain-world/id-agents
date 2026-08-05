@@ -325,3 +325,41 @@ Plan defects found and resolved with seniordev: linked query payload must be del
 30-day compaction boundary, force-delete needs a distinct stable outcome, and incremental
 vacuum must inspect SQLite's actual pragma rather than trusting configuration. All three are
 implemented and covered by parity tests.
+
+## Commit 6 — trusted local source context and operator configuration
+
+Completed by seniordev from cto's uncommitted partial work after review. The inherited
+code was kept: it already implemented the pairing agreements (a distinct
+`source_context_mismatch` for body/context disagreement, `source_unauthorized` reserved
+for the cross-owner contact-ID clash per the frozen definition, removal enumeration on
+org replacement, and audit appended inside each mutation's transaction). No approach was
+replaced.
+
+Shape: `src/inter-team/local-context.ts` holds the typed trusted-context seam commits 7/8
+will consume — `deriveLocalTeamId` lets a body agree with the derived team but never
+replace it, and `resolveOwnedContact` scopes alias lookup to the derived team while a
+globally resolved contact ID owned elsewhere fails `source_unauthorized`.
+`src/inter-team/operator-config.ts` implements contact CRUD, inbound policy, team lead,
+and whole-org replacement; every write and its `event_log` audit row
+(`interteam:operator_config`) share one transaction, with
+`replaceFromConfigInTransaction` added to the normalized org store for that purpose.
+Routes live under `/inter-team/config` and reuse the existing loopback + `X-Id-Admin`
+assertion with a mandatory explicit team; no token or capability is minted. For these
+routes the team middleware refuses to auto-create a team: a typo returns
+`team_not_found` rather than fabricating an owner. `X-Id-Agent` is an optional audit
+actor that must resolve in the explicit team; otherwise `agent_team_mismatch`. A stopped
+agent may be assigned lead and policy may open regardless of availability; the response
+carries degraded metadata only. The single-host boundary — a malicious same-UID worker
+can forge another team's assertion, and the loopback admin judgment changes behind a
+reverse proxy — is stated in `LOCAL_TRUST_BOUNDARY_NOTICE` and asserted by test.
+
+Executed gates: 19/19 new integration tests (`tests/integration/interteam-operator-config.test.ts`)
+covering context refusal, explicit-team requirement, no side-effect team creation,
+body-override rejection, cross-owner `source_unauthorized`, same alias in two teams,
+normalized alias collision, pin immutability, audited rename/delete with actor, stopped
+lead + open policy, cross-team lead refusal, removal enumeration, and org+audit rollback
+atomicity. Regressions: 112/112 across event-log, checkins, admin-mesh, repos, and
+org-backfill suites; full unit suite 769/769; build green. Granular group/subtree
+endpoints remain deferred until they can meet the explicit preview-and-audit rule; the
+whole-PUT enumerates destructive diffs in response and audit instead. Not applied to the
+live database; commit 7 not started.

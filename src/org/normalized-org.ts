@@ -138,46 +138,59 @@ export class NormalizedOrgStore {
   }
 
   async replaceFromConfig(teamId: string, org: OrgConfig, decision: OrgDecision): Promise<void> {
-    const { groups, tags } = await this.prepare(teamId, org);
     await inTransaction(this.db, async (tx) => {
-      await this.clearOrg(tx, teamId);
-      for (const group of groups) {
-        await query(tx,
-          `INSERT INTO org_groups
-             (id, team_id, parent_group_id, name, name_normalized, description, position)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [group.id, teamId, group.parentId, group.name, group.normalized, group.description, group.position],
-        );
-        if (group.leadAgentId) {
-          await query(tx,
-            `INSERT INTO org_group_leads (team_id, group_id, agent_id) VALUES (?, ?, ?)`,
-            [teamId, group.id, group.leadAgentId],
-          );
-        }
-        for (let position = 0; position < group.memberAgentIds.length; position++) {
-          await query(tx,
-            `INSERT INTO org_group_members (team_id, group_id, agent_id, position)
-             VALUES (?, ?, ?, ?)`,
-            [teamId, group.id, group.memberAgentIds[position], position],
-          );
-        }
-      }
-      for (const tag of tags) {
-        await query(tx,
-          `INSERT INTO org_tags (id, team_id, name, name_normalized, position)
-           VALUES (?, ?, ?, ?, ?)`,
-          [tag.id, teamId, tag.name, tag.normalized, tag.position],
-        );
-        for (let position = 0; position < tag.agentIds.length; position++) {
-          await query(tx,
-            `INSERT INTO org_agent_tags (team_id, tag_id, agent_id, position)
-             VALUES (?, ?, ?, ?)`,
-            [teamId, tag.id, tag.agentIds[position], position],
-          );
-        }
-      }
-      await this.writeState(tx, teamId, 'normalized', decision);
+      await new NormalizedOrgStore(tx).replaceFromConfigInTransaction(teamId, org, decision);
     });
+  }
+
+  /**
+   * Replace normalized state using an already-open transaction. Operator
+   * configuration uses this so the org rows, state decision, and audit event
+   * commit or roll back together.
+   */
+  async replaceFromConfigInTransaction(
+    teamId: string,
+    org: OrgConfig,
+    decision: OrgDecision,
+  ): Promise<void> {
+    const { groups, tags } = await this.prepare(teamId, org);
+    await this.clearOrg(this.db, teamId);
+    for (const group of groups) {
+      await query(this.db,
+        `INSERT INTO org_groups
+           (id, team_id, parent_group_id, name, name_normalized, description, position)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [group.id, teamId, group.parentId, group.name, group.normalized, group.description, group.position],
+      );
+      if (group.leadAgentId) {
+        await query(this.db,
+          `INSERT INTO org_group_leads (team_id, group_id, agent_id) VALUES (?, ?, ?)`,
+          [teamId, group.id, group.leadAgentId],
+        );
+      }
+      for (let position = 0; position < group.memberAgentIds.length; position++) {
+        await query(this.db,
+          `INSERT INTO org_group_members (team_id, group_id, agent_id, position)
+           VALUES (?, ?, ?, ?)`,
+          [teamId, group.id, group.memberAgentIds[position], position],
+        );
+      }
+    }
+    for (const tag of tags) {
+      await query(this.db,
+        `INSERT INTO org_tags (id, team_id, name, name_normalized, position)
+         VALUES (?, ?, ?, ?, ?)`,
+        [tag.id, teamId, tag.name, tag.normalized, tag.position],
+      );
+      for (let position = 0; position < tag.agentIds.length; position++) {
+        await query(this.db,
+          `INSERT INTO org_agent_tags (team_id, tag_id, agent_id, position)
+           VALUES (?, ?, ?, ?)`,
+          [teamId, tag.id, tag.agentIds[position], position],
+        );
+      }
+    }
+    await this.writeState(this.db, teamId, 'normalized', decision);
   }
 
   async validateFromConfig(teamId: string, org: OrgConfig): Promise<OrgValidationMetrics> {

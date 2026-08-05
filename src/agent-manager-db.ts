@@ -84,6 +84,11 @@ import {
 } from './wakeup-service/event-producer.js';
 import { RetentionService } from './wakeup-service/retention.js';
 import { NormalizedOrgStore, OrgValidationError } from './org/normalized-org.js';
+import {
+  InterteamOperatorConfigService,
+  type OperatorConfigContext,
+} from './inter-team/operator-config.js';
+import { LocalSourceContextError } from './inter-team/local-context.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
   DEFAULT_CLOSE_WHEN,
@@ -369,6 +374,7 @@ export class AgentManagerDb {
   private baseWorkDir: string;
   private db: Db;
   private orgStore: NormalizedOrgStore;
+  private interteamConfig: InterteamOperatorConfigService;
   private runningServers: Map<string, AgentRestServer> = new Map(); // key: `${teamId}:${agentId}`
 
   /**
@@ -445,6 +451,7 @@ export class AgentManagerDb {
     this.baseWorkDir = baseWorkDir;
     this.db = db;
     this.orgStore = new NormalizedOrgStore(db.adapter);
+    this.interteamConfig = new InterteamOperatorConfigService(db.adapter);
     if (opts?.deliverFn) this.deliverFn = opts.deliverFn;
     if (opts?.healthProbeFn) this.healthProbeFn = opts.healthProbeFn;
     this.libraryRoot =
@@ -1640,8 +1647,26 @@ export class AgentManagerDb {
         const teamName = this.getTeamName(req);
         const principal = this.isAdminRequest(req) ? 'admin' : 'anon';
 
+        if (
+          principal === 'admin'
+          && req.path.startsWith('/inter-team/config')
+          && !this.isTeamExplicit(req)
+        ) {
+          res.status(400).json({ error: 'explicit_team_context_required' });
+          return;
+        }
+
         let teamId: string;
-        if (principal === 'admin') {
+        if (principal === 'admin' && req.path.startsWith('/inter-team/config')) {
+          // Operator configuration must name an existing team explicitly.
+          // A typo here must never create a new team as a side effect.
+          const teamRow = await this.db.teams.getTeamByName(teamName);
+          if (!teamRow) {
+            res.status(404).json({ error: 'team_not_found' });
+            return;
+          }
+          teamId = teamRow.id;
+        } else if (principal === 'admin') {
           // Admin principals may create teams on the fly (legacy behaviour)
           teamId = await this.db.teams.getOrCreateTeamId(teamName);
           // Ensure per-team directory exists
@@ -1682,6 +1707,87 @@ export class AgentManagerDb {
         res.status(400).json({ error: err?.message || 'Invalid request context' });
       }
     };
+  }
+
+  /**
+   * Commit-6 operator context. This reuses the existing direct-loopback admin
+   * assertion; it does not create a credential or hostile-tenant boundary.
+   * The assumption is valid only for direct loopback connections. Putting a
+   * reverse proxy in front of the manager changes this admin boundary.
+   */
+  private async getInterteamOperatorContext(req: express.Request): Promise<OperatorConfigContext> {
+    if (!this.isAdminRequest(req)) throw new Error('operator_context_required');
+    if (!this.isTeamExplicit(req)) throw new Error('explicit_team_context_required');
+    const ctx = (req as any).ctx as { teamId?: string; teamName?: string } | undefined;
+    if (!ctx?.teamId || !ctx.teamName) throw new Error('explicit_team_context_required');
+
+    let agentId: string | null = null;
+    const actorHeader = req.headers['x-id-agent'];
+    if (actorHeader !== undefined) {
+      if (typeof actorHeader !== 'string' || actorHeader.trim() === '') {
+        throw new Error('operator_actor_invalid');
+      }
+      const actor = await this.db.agents.getById(actorHeader);
+      if (!actor) throw new Error('operator_actor_not_found');
+      if (actor.team_id !== ctx.teamId) throw new Error('agent_team_mismatch');
+      agentId = actor.id;
+    }
+    return {
+      localTeamId: ctx.teamId,
+      teamName: ctx.teamName,
+      agentId,
+      principal: 'operator',
+    };
+  }
+
+  private sendInterteamConfigError(res: express.Response, error: unknown): void {
+    const err = error as Error & { code?: string };
+    const code = error instanceof LocalSourceContextError
+      ? error.code
+      : error instanceof OrgValidationError
+        ? error.code
+        : err?.message || 'interteam_config_failed';
+    if (code === 'operator_context_required' || code === 'source_unauthorized' || code === 'agent_team_mismatch') {
+      res.status(403).json({ error: code });
+      return;
+    }
+    if (code === 'team_not_found' || code === 'contact_not_found' || code === 'operator_actor_not_found') {
+      res.status(404).json({ error: code });
+      return;
+    }
+    if (code === 'source_context_mismatch' || code === 'contact_pin_immutable') {
+      res.status(409).json({ error: code });
+      return;
+    }
+    if (
+      code === 'SQLITE_CONSTRAINT_UNIQUE'
+      || err?.code === '23505'
+      || /UNIQUE constraint failed/.test(err?.message || '')
+    ) {
+      res.status(409).json({ error: 'contact_alias_conflict' });
+      return;
+    }
+    const knownBadRequest = new Set([
+      'explicit_team_context_required',
+      'operator_actor_invalid',
+      'contact_alias_invalid',
+      'remote_node_id_invalid',
+      'remote_team_id_invalid',
+      'inbound_policy_invalid',
+      'team_lead_invalid',
+      'org_data_corrupt',
+      'org_reference_unresolved',
+      'org_reference_ambiguous',
+      'org_template_unexpanded',
+      'org_reason_invalid',
+      'invalid_address',
+    ]);
+    if (knownBadRequest.has(code)) {
+      res.status(400).json({ error: code });
+      return;
+    }
+    console.error('[Manager] Inter-team operator configuration failed:', error);
+    res.status(500).json({ error: 'interteam_config_failed' });
   }
 
   private setupRoutes() {
@@ -1780,6 +1886,99 @@ export class AgentManagerDb {
 
     // Install team/principal context middleware for all remaining routes
     this.managementApp.use(this.teamContextMiddleware());
+
+    // ==================== INTER-TEAM OPERATOR CONFIG ====================
+    // These routes deliberately reuse the existing direct-loopback admin
+    // context plus an explicit team selection. They mint no token/capability.
+    // Request bodies may agree with the derived team but can never replace it.
+    this.managementApp.get('/inter-team/config', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        res.json(await this.interteamConfig.read(context));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.get('/inter-team/config/contacts', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const snapshot = await this.interteamConfig.read(context);
+        res.json({ contacts: snapshot.contacts });
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.post('/inter-team/config/contacts', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.status(201).json(await this.interteamConfig.createContact(context, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.patch('/inter-team/config/contacts/:id', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.json(await this.interteamConfig.renameContact(context, req.params.id, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.delete('/inter-team/config/contacts/:id', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.json(await this.interteamConfig.deleteContact(context, req.params.id, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.put('/inter-team/config/policy', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.json(await this.interteamConfig.setInboundPolicy(context, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.put('/inter-team/config/lead', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.json(await this.interteamConfig.setTeamLead(context, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.get('/inter-team/config/org', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const snapshot = await this.interteamConfig.read(context);
+        res.json({ state: snapshot.orgState, org: snapshot.org });
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    this.managementApp.put('/inter-team/config/org', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        res.json(await this.interteamConfig.replaceOrg(context, body));
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
 
     this.managementApp.get('/health', async (req, res) => {
       const { id: teamId, name: teamName } = await this.getTeam(req);
