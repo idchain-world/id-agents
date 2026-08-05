@@ -58,7 +58,7 @@ Local caller context (`X-Id-Agent`, manager-owned launch context) is used to rou
 
 V1 trusts anything that can reach the listener. Three things follow. They are choices, not gaps:
 
-1. **A node speaks for its own teams and sender names.** The receiver cannot independently confirm which local team or agent name sent a message, or that a node is the node it claims to be. A per-message sender name is therefore an unverifiable claim for display and audit, not identity.
+1. **A node speaks for its own teams.** The receiver cannot independently confirm which local team sent a message, or that a node is the node it claims to be.
 2. **Local processes can rewrite routes and identity.** Anything running as the manager's user can redirect or rename a node.
 3. **Reaching the listener is enough.** There is no separate approval step. Whatever can connect can federate.
 
@@ -146,17 +146,6 @@ A conversation opened by name records that name for audit and pins the resolved 
 
 Network responses get lost, so a resubmission must not run the work twice. The origin manager durably allocates `conversationId` and `messageId` (agents do not choose them) and reuses the identical envelope on retry. Message identity is scoped to the node that minted it. An identical resubmission returns the existing status with `deduplicated: true` instead of running the work again. Reusing the ID with a different recognized envelope returns `idempotency_conflict`. The accepted envelope's durable comparison identity survives body compaction and message deletion; fields ignored under minor-version compatibility do not participate.
 
-Protocol 1.1 adds optional `senderName` to the request envelope. The origin publishes
-the sending agent's name at send time, or null for an admin principal with no agent
-context; it never publishes the origin-local agent ID. A 1.0 receiver accepts the
-same major and ignores the unknown field. A 1.1 receiver stores the value as a
-claimed sender name, but the field remains outside recognized envelope identity, so
-its presence, absence, or value cannot change replay or deduplication behavior.
-Send and continue responses return the exact `protocolVersion` used. A lost-response
-resubmission supplies that original value so an origin upgraded during the 30-day
-horizon rebuilds the original comparison identity instead of conflicting solely on a
-minor-version change.
-
 `202 Accepted` is returned **only after the destination transaction commits.** It does not mean the handler saw it or the model started.
 
 The origin node/team identifies who submitted every V1 request. Deduplication remains scoped to the minting node because message IDs are not globally unique, not because a destination submits replies.
@@ -207,8 +196,8 @@ The engine is table-agnostic, not messaging-specific — the measured bloat is i
 
 Windows are configurable per table, and safe unconfigured: compact 30 days, delete 365, terminal outcomes stay answerable, non-terminal and `unknown` never touched. Disabling retention for a table is explicit and logged.
 
-Origin submission attribution is status-scale metadata retained indefinitely alongside
-receipts; it holds no payload and is never compacted or swept.
+Origin submission attribution is status-scale metadata. It survives message
+compaction, then is removed when the corresponding message is replaced by a receipt.
 
 ### Results are pulled, not pushed
 
@@ -219,16 +208,14 @@ Collection is an idempotent, non-consuming read. It is authorized only for the c
 Binding and attribution are separate. The binding remains the origin **team**: any
 agent in that team may collect any of its messages, including one sent by a different
 agent. The origin additionally records, per accepted message, the sending agent's
-immutable ID and its name at send time. Only the name also travels in the request
-envelope; the ID remains local because another node's agent namespace cannot resolve
-it meaningfully. The receiver treats the name as an unverifiable claim and may use it
-only for display and audit. Neither the origin attribution nor the received claim may
-influence routing, admission, ordering, deduplication, capacity, collection
-authorization, or any other authority decision. The descriptor remains unchanged.
-An admin-principal send has null attribution and a null wire claim; no placeholder is
-fabricated.
+immutable ID and its name at send time. Both values remain exclusively origin-local;
+another node's agent namespace cannot resolve the ID, and V1 makes no sender claim on
+the wire. Attribution may not influence routing, admission, ordering, deduplication,
+capacity, collection authorization, or any other authority decision. The request
+envelope, descriptor, receiver state, and collection result remain unchanged. An
+admin-principal send has null attribution; no placeholder is fabricated.
 
-Because pull-only collection is unusable after a caller loses every conversation ID, `GET /inter-team/conversations` is an origin-team index. Trusted local context selects the origin team; there is no caller-supplied owner. A team sees only conversations whose pinned origin node/team is itself, and another team sees its own list (or an empty list), never a different error or evidence that the first team's rows exist. Each entry contains the conversation ID, immutable destination node/team, destination variant, pinned direct-agent ID and accepted name when applicable, a best-effort **current** origin-owned contact alias, the latest message's current/confirmed state and retention tier, that message's origin-local sender attribution (or null), and timestamps. It contains no request body, result, or failure detail. The alias is decoration only and may be null after contact deletion; it never replaces the immutable destination pin. By-ID collection decorates the normal collection result with the same local sender value without changing the inter-node collection contract.
+Because pull-only collection is unusable after a caller loses every conversation ID, `GET /inter-team/conversations` is an origin-team index. Trusted local context selects the origin team; there is no caller-supplied owner. A team sees only conversations whose pinned origin node/team is itself, and another team sees its own list (or an empty list), never a different error or evidence that the first team's rows exist. Each entry contains the conversation ID, immutable destination node/team, destination variant, pinned direct-agent ID and accepted name when applicable, a best-effort **current** origin-owned contact alias, the latest message's current/confirmed state and retention tier, that message's origin-local sender attribution (or null), and timestamps. It contains no request body, result, or failure detail. The alias is decoration only and may be null after contact deletion; it never replaces the immutable destination pin. Attribution is exposed only in this index; the frozen by-ID collection result has the same shape for local and federated reads.
 
 The index defaults to all conversations and optionally accepts `state=outstanding|terminal`, defined over the latest message: outstanding is `accepted|processing|unknown`; terminal is `completed|failed`, including receipt-backed terminal state. Each selected set independently receives the same count and encoded-size caps. Exceeding either cap fails the whole read with `read_response_too_large`; there is no pagination or silent partial response. This keeps outstanding-work recovery available even when a long-lived team's unfiltered history exceeds the cap.
 
@@ -349,21 +336,18 @@ They need separate write surfaces. The org-admin API is the only writer for tags
 
 The conversation index derives a latest-message projection from retained/compacted messages or status-only receipts. It does not invent a conversation-level state: its optional state filter is explicitly a filter over that latest message.
 
-**Message.** One request in a conversation, submitted by the pinned origin node/team. Its position and predecessor in the conversation's single request stream. Who it was addressed to and, once resolved, its durable team or agent binding. The request body, the comparison identity for the recognized envelope, and the receiver's nullable `claimed_sender_name` copied from the optional wire field. The claimed name is audit/display data only and is never resolved locally or consulted by behavior. Its status, last status actually confirmed, stable failure code when failed, and durable result when completed, including an explicit empty result. The times needed to reconstruct processing and apply message-level retention.
+**Message.** One request in a conversation, submitted by the pinned origin node/team. Its position and predecessor in the conversation's single request stream. Who it was addressed to and, once resolved, its durable team or agent binding. The request body and the comparison identity for the recognized envelope. Its status, last status actually confirmed, stable failure code when failed, and durable result when completed, including an explicit empty result. The times needed to reconstruct processing and apply message-level retention.
 
 **Origin submission attribution.** A separate origin-local record keyed by the
-minting node and message ID stores the origin team, conversation ID, immutable sender
-agent ID, name at send time, and submission timestamp. It has no foreign key to the
-agent row, so rename or deletion cannot rewrite or cascade the historical display
-name. It also has no receiver-message foreign key: the immutable ID and authoritative
-origin record remain local when federation transports exist, while only the name is
-published as an unverifiable receiver claim. Admin sends persist null sender fields
-and publish null. The first durable acceptance may create the record; deduplicated
-resubmission never rewrites it, and pre-attribution history remains null rather than
-being heuristically backfilled. It survives receiver message compaction and deletion
-so receipt-backed by-ID collection and the latest-message index retain attribution;
-its lifecycle follows the durable origin conversation/receipt history, not result-
-payload retention.
+minting node and message ID stores the immutable sender agent ID, name at send time,
+and creation timestamp. It has no foreign key to the agent row, so rename or deletion
+cannot rewrite or cascade the historical display name, and no foreign key to receiver
+message state because a federated outbound send has no local receiver-message row.
+Admin sends persist null sender fields. Only first durable acceptance may create the
+record, with conflict-do-nothing semantics; deduplicated resubmission never rewrites
+it, and pre-attribution history remains null rather than being heuristically
+backfilled. It survives message compaction and is deleted beside the message when
+retention replaces that message with a receipt, after which the index reports null.
 
 Four constraints carry guarantees rather than convenience:
 
@@ -423,7 +407,7 @@ Seventeen reviewable commits in a strict order. Commits 1–10 deliver the norma
 
 ### Phase A — Freeze the contract
 
-**Commit 1 — Protocol types, parser, state machine, contract tests.** No network path, no behavior flag. Freeze: address parsing and the `team`, `agent_name`, and `agent_id` destination variants; protocol version as `major.minor`, where a receiver accepts any minor within its own major and ignores fields it does not recognize, and any other major returns `protocol_unsupported`; the additive 1.1 nullable `senderName` claim, with 1.0 receivers ignoring it and all receivers excluding it from comparison identity and authority; resolve-once/immutable-ID pinning; permissive `open` (team vs direct, no gate/flag); one origin-submitted ordered request stream; a durable result before `completed`; non-consuming five-state collection; strict continuation and collection participant binding; identical replay vs `idempotency_conflict`; `accepted -> processing -> completed|failed|unknown` with evidence-led `unknown` exit; roster reads unaffected by inbound policy; group names published as roster context but never addressable and never as a tree; intrinsic random `nodeId` carried as a non-secret wire value, taken at face value on the configured federation listener, and never derived from a network attribute; **no envelope `authScheme` field**; the 30-day **resubmission horizon** an origin must obey; the accepted host trust domain and absence of any local caller credential. Pure tests include a federation request claiming our own `nodeId` being rejected while same-manager delivery succeeds, ambiguous roster names, the whole-catalog field being non-authoritative, reads succeeding under either policy, bounded-read errors, and a resubmission past the horizon being rejected.
+**Commit 1 — Protocol types, parser, state machine, contract tests.** No network path, no behavior flag. Freeze: address parsing and the `team`, `agent_name`, and `agent_id` destination variants; protocol version as `major.minor`, where a receiver accepts any minor within its own major and ignores fields it does not recognize, and any other major returns `protocol_unsupported`; resolve-once/immutable-ID pinning; permissive `open` (team vs direct, no gate/flag); one origin-submitted ordered request stream; a durable result before `completed`; non-consuming five-state collection; strict continuation and collection participant binding; identical replay vs `idempotency_conflict`; `accepted -> processing -> completed|failed|unknown` with evidence-led `unknown` exit; roster reads unaffected by inbound policy; group names published as roster context but never addressable and never as a tree; intrinsic random `nodeId` carried as a non-secret wire value, taken at face value on the configured federation listener, and never derived from a network attribute; **no envelope `authScheme` field**; the 30-day **resubmission horizon** an origin must obey; the accepted host trust domain and absence of any local caller credential. Pure tests include a federation request claiming our own `nodeId` being rejected while same-manager delivery succeeds, ambiguous roster names, the whole-catalog field being non-authoritative, reads succeeding under either policy, bounded-read errors, and a resubmission past the horizon being rejected.
 *Gate:* contract tests run with no manager process and contain no endpoint or worker URL.
 
 ### Phase B — Durable local foundation

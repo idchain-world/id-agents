@@ -250,7 +250,7 @@ describe('two teams on one manager', () => {
     // its linked job is pending, so the state is processing.
     await scanTick();
     // Attribution is not collection authority: another agent in the same
-    // origin team can collect the first agent's message and sees who sent it.
+    // origin team can collect the first agent's message.
     const peer = new InterTeamCli({
       managerUrl: baseUrl,
       team: 'origin-team',
@@ -259,7 +259,7 @@ describe('two teams on one manager', () => {
     });
     let collected = await peer.collect(teamConversation, teamMessage);
     expect(collected.state).toBe('processing');
-    expect(collected.sender).toEqual({ agentId: originAgentId, nameAtSend: 'origin-caller' });
+    expect(collected).not.toHaveProperty('sender');
 
     await completeLinkedQuery(teamMessage, { report: 'done' });
     await scanTick();
@@ -270,19 +270,21 @@ describe('two teams on one manager', () => {
         retention: 'retained',
         result: { report: 'done' },
         resultPresent: true,
-        sender: { agentId: originAgentId, nameAtSend: 'origin-caller' },
       });
     }
   });
 
-  it('returns null sender attribution for an admin-principal send', async () => {
+  it('lists null sender attribution for an admin-principal send', async () => {
     const admin = new InterTeamCli({
       managerUrl: baseUrl,
       team: 'origin-team',
       fetchImpl: spyFetch as typeof fetch,
     });
     const sent = await admin.send({ address: 'team:partners/dest-worker', body: { ask: 'admin-send' } });
-    expect(await admin.collect(sent.conversationId, sent.messageId)).toMatchObject({ sender: null });
+    const listed = await admin.listConversations();
+    expect(listed.conversations.find((row) => row.conversationId === sent.conversationId)
+      ?.latestMessage.sender).toBeNull();
+    expect(await admin.collect(sent.conversationId, sent.messageId)).not.toHaveProperty('sender');
     await new InterteamMessageStore(db.adapter).recordFailed({
       submitterNodeId: (await db.adapter.query<{ node_id: string }>(
         `SELECT node_id FROM manager_identity`,
@@ -317,11 +319,9 @@ describe('two teams on one manager', () => {
     });
     expect(original.status).toBe(202);
     const first = await original.json() as {
-      conversationId: string; messageId: string; protocolVersion: string;
-      firstSubmittedAt: number; deduplicated: boolean;
+      conversationId: string; messageId: string; firstSubmittedAt: number; deduplicated: boolean;
     };
     expect(first.deduplicated).toBe(false);
-    expect(first.protocolVersion).toBe('1.1');
 
     const resubmit = await spyFetch(`${baseUrl}/inter-team/resubmit`, {
       method: 'POST',
@@ -331,7 +331,6 @@ describe('two teams on one manager', () => {
         body: { ask: 'lost-response' },
         conversationId: first.conversationId,
         messageId: first.messageId,
-        protocolVersion: first.protocolVersion,
         firstSubmittedAt: first.firstSubmittedAt,
       }),
     });

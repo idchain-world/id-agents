@@ -37,7 +37,6 @@ interface MessageRow {
   conversation_pk: string;
   submitter_node_id: string;
   submitter_team_id: string;
-  claimed_sender_name: string | null;
   message_id: string;
   position: number;
   predecessor_message_id: string | null;
@@ -175,52 +174,29 @@ export class InterteamMessageStore {
 
   /**
    * Persist origin-local display attribution after the receiver durably
-   * accepts a submission. The ID is deliberately absent from the envelope;
-   * the published name is deliberately absent from recognized envelope
-   * identity. First acceptance wins; a retry by a different teammate cannot
-   * rewrite the original sender.
+   * accepts a submission. First acceptance wins; a retry by a different
+   * teammate cannot rewrite the original sender.
    */
   async recordOriginSubmission(input: {
-    originNodeId: string;
-    originTeamId: string;
-    conversationId: string;
+    nodeId: string;
     messageId: string;
     sender: SenderAttribution | null;
     now?: number;
   }): Promise<void> {
-    const conflict = this.db.dialect === 'sqlite'
-      ? `ON CONFLICT(origin_node_id, message_id) DO NOTHING`
-      : `ON CONFLICT (origin_node_id, message_id) DO NOTHING`;
     await query(
       this.db,
       `INSERT INTO interteam_origin_submissions
-         (origin_node_id, origin_team_id, conversation_id, message_id,
-          sender_agent_id, sender_name_at_send, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ${conflict}`,
+         (node_id, message_id, sender_agent_id, sender_name_at_send, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT (node_id, message_id) DO NOTHING`,
       [
-        input.originNodeId,
-        input.originTeamId,
-        input.conversationId,
+        input.nodeId,
         input.messageId,
         input.sender?.agentId ?? null,
         input.sender?.nameAtSend ?? null,
         input.now ?? Date.now(),
       ],
     );
-  }
-
-  async originSender(originNodeId: string, messageId: string): Promise<SenderAttribution | null> {
-    const result = await query<{ sender_agent_id: string | null; sender_name_at_send: string | null }>(
-      this.db,
-      `SELECT sender_agent_id, sender_name_at_send
-       FROM interteam_origin_submissions
-       WHERE origin_node_id = ? AND message_id = ?`,
-      [originNodeId, messageId],
-    );
-    const row = result.rows[0];
-    if (!row?.sender_agent_id) return null;
-    return { agentId: row.sender_agent_id, nameAtSend: row.sender_name_at_send };
   }
 
   async acceptRequest(input: {
@@ -359,20 +335,18 @@ export class InterteamMessageStore {
       await query(
         tx,
         `INSERT INTO interteam_messages
-           (id, conversation_pk, submitter_node_id, submitter_team_id,
-            claimed_sender_name, message_id,
+           (id, conversation_pk, submitter_node_id, submitter_team_id, message_id,
             position, predecessor_message_id, recipient_kind,
             recipient_name_at_acceptance, resolved_agent_id, comparison_identity,
             request_body, status, last_confirmed_status, result_present,
             retention_tier, accepted_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', 'accepted', ?,
                  'retained', ?, ?)`,
         [
           messagePk,
           conversation.id,
           envelope.originNodeId,
           envelope.originTeamId,
-          typeof envelope.senderName === 'string' ? envelope.senderName : null,
           envelope.messageId,
           envelope.position,
           envelope.predecessorMessageId,
@@ -708,6 +682,12 @@ export class InterteamMessageStore {
             Number(message.terminal_at),
             now,
           ],
+        );
+        await query(
+          tx,
+          `DELETE FROM interteam_origin_submissions
+           WHERE node_id = ? AND message_id = ?`,
+          [message.submitter_node_id, message.message_id],
         );
         await query(tx, `DELETE FROM interteam_messages WHERE id = ?`, [message.id]);
       }

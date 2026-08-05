@@ -2,11 +2,9 @@
 
 import type { DbAdapter, QueryResult } from '../db/db-adapter.js';
 import {
-  INTER_TEAM_PROTOCOL_VERSION,
   automaticResubmissionAllowed,
   readRoster,
   rosterReadRateResult,
-  type CollectionResult,
   type Destination,
   type InterTeamRequestEnvelope,
   type RosterAgent,
@@ -14,6 +12,7 @@ import {
 } from './protocol.js';
 import {
   InterteamMessageStore,
+  type CollectStoredResult,
   type SenderAttribution,
 } from './message-store.js';
 import {
@@ -82,15 +81,10 @@ export type OriginSendResult =
       ok: true;
       conversationId: string;
       messageId: string;
-      protocolVersion: string;
       firstSubmittedAt: number;
       outcome: Extract<AcceptanceOutcome, { kind: 'accepted' | 'deduplicated' }>;
     }
   | { ok: false; code: string };
-
-export type OriginCollectResult =
-  | { ok: true; value: CollectionResult & { sender: SenderAttribution | null } }
-  | { ok: false; code: 'conversation_not_found' };
 
 /** The frozen descriptor projection: nodeId + teamId are the contact pin. */
 export interface TeamDescriptor {
@@ -176,7 +170,7 @@ export class InterTeamOriginClient {
     const now = input.now ?? Date.now();
     const allocated = await this.store.allocateOriginIds(localNodeId, now);
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
+      protocolVersion: '1.0',
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: resolved.contact.remoteNodeId,
@@ -211,7 +205,7 @@ export class InterTeamOriginClient {
         ? { kind: 'agent_name', agentName: binding.destination_name_at_acceptance! }
         : { kind: 'agent_id', agentId: binding.destination_agent_id! };
     const envelope: InterTeamRequestEnvelope = {
-      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
+      protocolVersion: '1.0',
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationNodeId: binding.destination_node_id,
@@ -252,26 +246,17 @@ export class InterTeamOriginClient {
     now: number,
   ): Promise<OriginSendResult> {
     const sender = await this.senderAtSend(context);
-    // Only the human-usable name crosses the node boundary. The immutable ID
-    // remains in the origin-local attribution table because it is meaningful
-    // only within this manager's namespace.
-    const outboundEnvelope: InterTeamRequestEnvelope = {
-      ...envelope,
-      senderName: sender?.nameAtSend ?? null,
-    };
     const outcome = await this.acceptance.accept({
       transport: { kind: 'same_manager', originTeamId: context.localTeamId },
-      envelope: outboundEnvelope,
+      envelope,
       now,
     });
     if (outcome.kind === 'accepted') {
       // Attribution is display metadata, never part of acceptance. A failure
       // here must not turn a durably accepted message into a failed send.
       await this.store.recordOriginSubmission({
-        originNodeId: outboundEnvelope.originNodeId,
-        originTeamId: outboundEnvelope.originTeamId,
-        conversationId: outboundEnvelope.conversationId,
-        messageId: outboundEnvelope.messageId,
+        nodeId: envelope.originNodeId,
+        messageId: envelope.messageId,
         sender,
         now,
       }).catch((error) => {
@@ -281,10 +266,9 @@ export class InterTeamOriginClient {
     if (outcome.kind === 'accepted' || outcome.kind === 'deduplicated') {
       return {
         ok: true,
-        conversationId: outboundEnvelope.conversationId,
-        messageId: outboundEnvelope.messageId,
-        protocolVersion: outboundEnvelope.protocolVersion,
-        firstSubmittedAt: outboundEnvelope.firstSubmittedAt,
+        conversationId: envelope.conversationId,
+        messageId: envelope.messageId,
+        firstSubmittedAt: envelope.firstSubmittedAt,
         outcome,
       };
     }
@@ -319,8 +303,6 @@ export class InterTeamOriginClient {
     body: unknown;
     conversationId: string;
     messageId: string;
-    /** Version used for the original attempt; required for byte-stable replay identity across upgrades. */
-    protocolVersion?: string;
     firstSubmittedAt: number;
     now?: number;
   }): Promise<OriginSendResult> {
@@ -337,7 +319,7 @@ export class InterTeamOriginClient {
       context: input.context,
       now: input.now,
       envelope: {
-        protocolVersion: input.protocolVersion ?? INTER_TEAM_PROTOCOL_VERSION,
+        protocolVersion: '1.0',
         originNodeId: localNodeId,
         originTeamId: input.context.localTeamId,
         destinationNodeId: resolved.contact.remoteNodeId,
@@ -361,7 +343,7 @@ export class InterTeamOriginClient {
     context: TrustedLocalSourceContext;
     conversationId: string;
     messageId: string;
-  }): Promise<OriginCollectResult> {
+  }): Promise<CollectStoredResult> {
     const localNodeId = await this.acceptance.localNodeId();
     const binding = await this.ownedConversation(
       localNodeId,
@@ -369,21 +351,13 @@ export class InterTeamOriginClient {
       input.conversationId,
     );
     if (!binding) return { ok: false, code: 'conversation_not_found' };
-    const collected = await this.store.collect({
+    return this.store.collect({
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
       destinationTeamId: binding.destination_team_id,
       conversationId: input.conversationId,
       messageId: input.messageId,
     });
-    if (!collected.ok) return collected;
-    return {
-      ok: true,
-      value: {
-        ...collected.value,
-        sender: await this.store.originSender(localNodeId, input.messageId),
-      },
-    };
   }
 
   /**
@@ -471,7 +445,7 @@ export class InterTeamOriginClient {
        LEFT JOIN latest_ranked latest
          ON latest.conversation_pk = c.id AND latest.row_number = 1
        LEFT JOIN interteam_origin_submissions origin_submission
-         ON origin_submission.origin_node_id = c.origin_node_id
+         ON origin_submission.node_id = c.origin_node_id
         AND origin_submission.message_id = latest.message_id
        WHERE c.origin_node_id = ? AND c.origin_team_id = ?
          ${statePredicate}
@@ -554,7 +528,7 @@ export class InterTeamOriginClient {
     return {
       ok: true,
       descriptor: {
-        protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
+        protocolVersion: '1.0',
         nodeId: localNodeId,
         teamId: team.rows[0].id,
         teamDisplayName: team.rows[0].name,

@@ -75,9 +75,6 @@ describe('inter-team V1 protocol contract', () => {
   });
 
   it('accepts every minor in the receiver major and rejects another major', () => {
-    expect(INTER_TEAM_PROTOCOL_VERSION).toBe('1.1');
-    expect(protocolCompatibility('1.0', '1.1')).toEqual({ ok: true });
-    expect(protocolCompatibility('1.1', '1.0')).toEqual({ ok: true });
     expect(protocolCompatibility('1.0', '1.99')).toEqual({ ok: true });
     expect(protocolCompatibility('1.7', '1.0')).toEqual({ ok: true });
     expect(protocolCompatibility('1.0', '2.0')).toEqual({
@@ -193,10 +190,6 @@ describe('inter-team V1 protocol contract', () => {
     const accepted = recognizedEnvelopeIdentity(envelope);
     const withUnknownMinorField = { ...envelope, extensionFromNewerMinor: 'ignored' };
     expect(classifyReplay(accepted, withUnknownMinorField)).toEqual({ kind: 'identical_replay' });
-    expect(classifyReplay(accepted, { ...envelope, senderName: 'claimed-sender' }))
-      .toEqual({ kind: 'identical_replay' });
-    expect(JSON.parse(recognizedEnvelopeIdentity({ ...envelope, senderName: 'claimed-sender' })))
-      .not.toHaveProperty('senderName');
     expect(classifyReplay(accepted, { ...envelope, body: { task: 'different' } })).toEqual({
       kind: 'conflict',
       code: 'idempotency_conflict',
