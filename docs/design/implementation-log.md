@@ -420,3 +420,33 @@ data dependency.
 
 Tests: 11 in `tests/repos/interteam-acceptance-service.test.ts`. All repos suites
 109/109, typecheck green. No schema change; live database untouched.
+
+## Commit 9 — async processor and recipient lifecycle
+
+`src/inter-team/processor.ts` processes accepted messages strictly after their
+acceptance transaction. One `scan()` pass reconciles in-flight work from durable
+evidence, then starts eligible accepted messages; startup recovery, the post-accept
+kick, and the timer tick are the same code path, with no exactly-once claim. The
+durable local job is a `queries` row with the deterministic ID
+`interteam_<messagePk>` (`ON CONFLICT DO NOTHING`, so a same-ID restart re-links
+instead of forking) plus the commit-5 `interteam_processing` row; both exist before
+the message reports `processing`, and the commit-5 trigger backstops that order.
+Team messages resolve to the lead configured at processing time — a newly assigned
+lead picks up pending team work; direct messages use the agent ID pinned at
+acceptance and are never re-resolved. A stopped target leaves work `accepted`. A
+deleted pinned recipient fails `recipient_deleted` in both the accepted and
+processing phases — the only agent-level terminal event — while team work with a
+deleted lead just waits. Handler failure records the stable code `handler_failed`.
+Each conversation's stream runs serially in position order: a message starts only
+when every earlier position is terminal and nothing in the conversation is in
+flight. `unknown` is entered only when the durable job evidence is lost and left
+only when durable evidence reappears; while evidence is absent the processor
+refuses to guess. Dispatch is a pluggable hook whose default hands the durable
+query row to the existing queries machinery — nothing here dials a worker URL.
+
+Tests: 9 in `tests/repos/interteam-processor.test.ts` — the design's four named
+cases (stopped-after-accept stays accepted; same-ID restart proceeds; rename does
+not break continuation; deletion differs from team-lead reassignment) plus serial
+ordering, durable-result-before-completed, unknown enter/leave on evidence, stable
+handler failure, and mid-flight deletion. Typecheck green. No schema change; live
+database untouched.
