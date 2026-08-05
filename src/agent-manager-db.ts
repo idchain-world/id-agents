@@ -94,7 +94,7 @@ import {
 } from './inter-team/local-context.js';
 import { InterTeamAcceptanceService, type AcceptanceBounds } from './inter-team/acceptance-service.js';
 import { InterTeamOriginClient, INTERTEAM_ADDRESS_HINT } from './inter-team/origin-client.js';
-import { InterTeamProcessor } from './inter-team/processor.js';
+import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
 import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
@@ -459,6 +459,8 @@ export class AgentManagerDb {
       libraryRoot?: string | null;
       /** Override inter-team acceptance bounds (for tests). */
       interteamBounds?: Partial<AcceptanceBounds>;
+      /** Override inter-team work delivery (for tests). */
+      interteamDispatchFn?: (input: InterTeamDispatchInput) => Promise<void>;
     },
   ) {
     this.baseWorkDir = baseWorkDir;
@@ -469,7 +471,9 @@ export class AgentManagerDb {
       bounds: opts?.interteamBounds,
     });
     this.interteamOrigin = new InterTeamOriginClient(db.adapter, this.interteamAcceptance);
-    this.interteamProcessor = new InterTeamProcessor(db.adapter);
+    this.interteamProcessor = new InterTeamProcessor(db.adapter, {
+      dispatchFn: opts?.interteamDispatchFn ?? ((input) => this.deliverInterteamWork(input)),
+    });
     if (opts?.deliverFn) this.deliverFn = opts.deliverFn;
     if (opts?.healthProbeFn) this.healthProbeFn = opts.healthProbeFn;
     this.libraryRoot =
@@ -1859,6 +1863,53 @@ export class AgentManagerDb {
       peer_route_unconfigured: 503,
     };
     res.status(statusByCode[code] ?? 500).json({ error: code });
+  }
+
+  /**
+   * Deliver accepted inter-team work to the handling agent's runtime. A
+   * `queries` row alone does not wake a Claude/Codex worker, so this
+   * forwards to the same `/talk` path `/talk-to` uses, then rewrites the
+   * durable job row to the runtime's own query ID so replies route back and
+   * the commit-9 reconciler reads the real job. Delivery failure leaves the
+   * message `processing` with its link intact; the next scan retries.
+   */
+  private async deliverInterteamWork(input: InterTeamDispatchInput): Promise<void> {
+    let result: Awaited<ReturnType<AgentManagerDb['forwardToAgent']>>;
+    try {
+      const agent = await this.db.agents.getById(input.handlerAgentId);
+      if (!agent) return;
+      const resolved = await this.resolveTargetAgent(input.localTeamId, agent.name);
+      if ('error' in resolved) {
+        console.error(`[Manager] inter-team dispatch could not resolve ${agent.name}: ${resolved.error}`);
+        return;
+      }
+      const prompt = typeof input.body === 'string' ? input.body : JSON.stringify(input.body ?? null);
+      result = await this.forwardToAgent(resolved.targetUrl, prompt, 'inter-team');
+    } catch (error) {
+      // An unreachable runtime is a temporary condition, never a protocol
+      // outcome: the message stays `processing` and a later scan retries.
+      console.error('[Manager] inter-team dispatch failed:', error);
+      return;
+    }
+    if (!result.ok) {
+      console.error(`[Manager] inter-team dispatch failed: ${result.error}`);
+      return;
+    }
+    const runtimeQueryId = result.data?.query_id;
+    if (!runtimeQueryId || runtimeQueryId === input.localQueryId) return;
+    // Point the durable link at the runtime's query so completion is observed.
+    await this.db.adapter.query(
+      this.db.adapter.dialect === 'sqlite'
+        ? `UPDATE queries SET query_id = ? WHERE team_id = ? AND query_id = ?`
+        : `UPDATE queries SET query_id = $1 WHERE team_id = $2 AND query_id = $3`,
+      [runtimeQueryId, input.localTeamId, input.localQueryId],
+    );
+    await this.db.adapter.query(
+      this.db.adapter.dialect === 'sqlite'
+        ? `UPDATE interteam_processing SET local_query_id = ? WHERE local_query_id = ?`
+        : `UPDATE interteam_processing SET local_query_id = $1 WHERE local_query_id = $2`,
+      [runtimeQueryId, input.localQueryId],
+    );
   }
 
   /** Parse the request's destination selection into contact + variant. */

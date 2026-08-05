@@ -33,7 +33,9 @@ export interface ProcessorAction {
     | 'failed_recipient_deleted'
     | 'failed_handler'
     | 'marked_unknown'
-    | 'recovered_unknown';
+    | 'recovered_unknown'
+    | 'waiting_capacity'
+    | 'redispatched_abandoned_job';
 }
 
 export interface DispatchInput {
@@ -44,6 +46,11 @@ export interface DispatchInput {
   messageId: string;
   body: unknown;
 }
+
+/** Local job states that mean the handler will never answer this job. */
+const ABANDONED_JOB_STATUSES = new Set(['cancelled', 'canceled', 'expired']);
+
+export const DEFAULT_MAX_CONCURRENT_DISPATCH = 4;
 
 interface PendingMessageRow {
   id: string;
@@ -88,12 +95,17 @@ export class InterTeamProcessor {
        * delivers it. V1 never dials a worker URL from here.
        */
       dispatchFn?: (input: DispatchInput) => Promise<void>;
+      /** Cap on messages dispatched in one scan pass. */
+      maxConcurrentDispatch?: number;
     } = {},
   ) {
     this.store = new InterteamMessageStore(db);
     this.resolver = options.resolver ?? new DestinationResolver(db);
     this.dispatchFn = options.dispatchFn ?? (async () => {});
+    this.maxConcurrentDispatch = options.maxConcurrentDispatch ?? DEFAULT_MAX_CONCURRENT_DISPATCH;
   }
+
+  private readonly maxConcurrentDispatch: number;
 
   /** Deterministic, so a restart re-links the same job instead of forking one. */
   static localQueryId(messagePk: string): string {
@@ -134,7 +146,12 @@ export class InterTeamProcessor {
       [],
     );
 
+    let dispatchedThisPass = 0;
     for (const message of candidates.rows) {
+      if (dispatchedThisPass >= this.maxConcurrentDispatch) {
+        actions.push({ messageId: message.message_id, action: 'waiting_capacity' });
+        continue;
+      }
       const inFlight = await query<{ id: string }>(
         this.db,
         `SELECT id FROM interteam_messages
@@ -163,41 +180,111 @@ export class InterTeamProcessor {
       }
 
       const localQueryId = InterTeamProcessor.localQueryId(message.id);
-      // Durable job first; `ON CONFLICT DO NOTHING` makes a restart re-link
-      // rather than fork. Only then does the message report `processing`.
-      await query(
+      // A crash between job creation and linkage could previously strand the
+      // job with an earlier handler. Adopt an existing job's owner instead of
+      // resolving a new one, so the deterministic ID can never deadlock.
+      const existingJob = await query<{ agent_id: string | null; team_id: string; status: string }>(
         this.db,
-        `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
-         VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)
-         ON CONFLICT (team_id, query_id) DO NOTHING`,
-        [
-          target.teamId,
-          localQueryId,
-          target.agentId,
-          message.request_body ?? 'null',
-          now,
-          target.agentId,
-        ],
+        `SELECT agent_id, team_id, status FROM queries WHERE query_id = ?`,
+        [localQueryId],
       );
+      const orphan = existingJob.rows[0];
+      const handlerAgentId = orphan?.agent_id ?? target.agentId;
+      const handlerTeamId = orphan?.team_id ?? target.teamId;
+
       await this.store.recordProcessing({
         submitterNodeId: message.submitter_node_id,
         messageId: message.message_id,
-        localTeamId: target.teamId,
+        localTeamId: handlerTeamId,
         localQueryId,
-        handlerAgentId: target.agentId,
+        handlerAgentId,
         now,
+        // Job row, link row, and the `processing` transition in one
+        // transaction: a crash can no longer split them.
+        ensureJob: async (tx) => {
+          await query(
+            tx,
+            `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
+             VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)
+             ON CONFLICT (team_id, query_id) DO NOTHING`,
+            [handlerTeamId, localQueryId, handlerAgentId, message.request_body ?? 'null', now, handlerAgentId],
+          );
+        },
       });
       await this.dispatchFn({
-        localTeamId: target.teamId,
-        handlerAgentId: target.agentId,
+        localTeamId: handlerTeamId,
+        handlerAgentId,
         localQueryId,
         submitterNodeId: message.submitter_node_id,
         messageId: message.message_id,
         body: message.request_body === null ? null : parseJsonColumn(message.request_body),
       });
+      dispatchedThisPass += 1;
       actions.push({ messageId: message.message_id, action: 'dispatched' });
     }
     return actions;
+  }
+
+  /**
+   * Replace a dead local job (cancelled by an agent stop, or expired by the
+   * sweeper) with a fresh one. Returns null while no handler is available,
+   * leaving the message processing and unlinked so a later scan retries.
+   */
+  private async redispatchAbandoned(
+    message: PendingMessageRow & { local_team_id?: string; local_query_id?: string },
+    now: number,
+  ): Promise<ProcessorAction | null> {
+    const target = await this.resolveProcessingTarget(message);
+    if (target.kind === 'deleted') {
+      await this.store.recordFailed({
+        submitterNodeId: message.submitter_node_id,
+        messageId: message.message_id,
+        failureCode: INTERTEAM_RECIPIENT_DELETED,
+        now,
+      });
+      return { messageId: message.message_id, action: 'failed_recipient_deleted' };
+    }
+    if (target.kind === 'waiting') {
+      // Keep the dead job and its link in place: they are the durable record
+      // that this message is mid-flight. Removing them would look like lost
+      // evidence and wrongly drive the message to `unknown`. A later scan
+      // sees the same abandoned job and retries once a handler returns.
+      return { messageId: message.message_id, action: 'waiting_recipient' };
+    }
+
+    const localQueryId = `${InterTeamProcessor.localQueryId(message.id)}_r${now}`;
+    await query(
+      this.db,
+      `DELETE FROM queries WHERE team_id = ? AND query_id = ?`,
+      [message.local_team_id, message.local_query_id],
+    );
+    await this.store.recordProcessing({
+      submitterNodeId: message.submitter_node_id,
+      messageId: message.message_id,
+      localTeamId: target.teamId,
+      localQueryId,
+      handlerAgentId: target.agentId,
+      now,
+      allowRelink: true,
+      ensureJob: async (tx) => {
+        await query(
+          tx,
+          `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
+           VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)
+           ON CONFLICT (team_id, query_id) DO NOTHING`,
+          [target.teamId, localQueryId, target.agentId, message.request_body ?? 'null', now, target.agentId],
+        );
+      },
+    });
+    await this.dispatchFn({
+      localTeamId: target.teamId,
+      handlerAgentId: target.agentId,
+      localQueryId,
+      submitterNodeId: message.submitter_node_id,
+      messageId: message.message_id,
+      body: message.request_body === null ? null : parseJsonColumn(message.request_body),
+    });
+    return { messageId: message.message_id, action: 'redispatched_abandoned_job' };
   }
 
   private async resolveProcessingTarget(message: PendingMessageRow): Promise<
@@ -305,6 +392,15 @@ export class InterTeamProcessor {
           now,
         });
         actions.push({ messageId: message.message_id, action: 'failed_handler' });
+      } else if (ABANDONED_JOB_STATUSES.has(row.status)) {
+        // Stopping an agent cancels its queries and the sweeper expires stale
+        // ones. Neither is an answer and neither is terminal for us: an
+        // accepted message waits for its target. Drop the dead job and
+        // re-dispatch when a handler is available again. The message stays
+        // `processing` because the receiver still owns the work — the
+        // protocol has no accepted <- processing transition.
+        const action = await this.redispatchAbandoned(message, now);
+        if (action) actions.push(action);
       }
       // pending/processing job rows: the work is with the runtime; wait.
     }

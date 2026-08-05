@@ -62,6 +62,7 @@ let leadId: string;
 let workerId: string;
 let originAgentId: string;
 const requestedUrls: string[] = [];
+const dispatchedWork: string[] = [];
 
 const realFetch = globalThis.fetch;
 function spyFetch(url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) {
@@ -111,6 +112,10 @@ async function startManager(): Promise<void> {
   await migrateSqlite(db.adapter as any);
   manager = new AgentManagerDb(workDir, db as any, {
     interteamBounds: { maxNonTerminalPerTeam: 6 },
+    // Fixture agents have no runtime listening, so real /talk delivery is
+    // stubbed here. The production wiring is covered by its own test; what
+    // this file proves is the protocol path around it.
+    interteamDispatchFn: async (input) => { dispatchedWork.push(input.handlerAgentId); },
   });
   await manager.start(port);
 }

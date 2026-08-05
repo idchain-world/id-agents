@@ -256,6 +256,126 @@ describe('inter-team async processor (commit 9)', () => {
     ))[0]).toMatchObject({ status: 'failed', failure_code: 'handler_failed' });
   });
 
+  it('re-dispatches when a stop cancels the local job instead of sticking forever', async () => {
+    const e = envelope({ destination: { kind: 'agent_id', agentId: worker } });
+    await accept(e);
+    await processor.scan();
+    const link = (await q<{ local_team_id: string; local_query_id: string }>(
+      db,
+      `SELECT p.local_team_id, p.local_query_id FROM interteam_processing p
+       JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?`,
+      [e.messageId],
+    ))[0]!;
+
+    // Stopping an agent cancels its queries; that is not an answer.
+    await q(db, `UPDATE queries SET status = 'cancelled' WHERE team_id = ? AND query_id = ?`,
+      [link.local_team_id, link.local_query_id]);
+    await q(db, `UPDATE agents SET status = 'stopped' WHERE id = ?`, [worker]);
+
+    expect(await processor.scan()).toContainEqual({ messageId: e.messageId, action: 'waiting_recipient' });
+    expect(await messageStatus(e.messageId)).toBe('processing');
+
+    await q(db, `UPDATE agents SET status = 'running' WHERE id = ?`, [worker]);
+    expect(await processor.scan()).toContainEqual({
+      messageId: e.messageId, action: 'redispatched_abandoned_job',
+    });
+    const fresh = (await q<{ local_query_id: string }>(
+      db,
+      `SELECT p.local_query_id FROM interteam_processing p
+       JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?`,
+      [e.messageId],
+    ))[0]!;
+    expect(fresh.local_query_id).not.toBe(link.local_query_id);
+
+    await completeLinkedQuery(e.messageId, 'after-restart');
+    expect(await processor.scan()).toContainEqual({ messageId: e.messageId, action: 'completed' });
+  });
+
+  it('treats an expired job the same way, never leaving the message stuck', async () => {
+    const e = envelope({ destination: { kind: 'agent_id', agentId: worker } });
+    await accept(e);
+    await processor.scan();
+    const link = (await q<{ local_team_id: string; local_query_id: string }>(
+      db,
+      `SELECT p.local_team_id, p.local_query_id FROM interteam_processing p
+       JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?`,
+      [e.messageId],
+    ))[0]!;
+    await q(db, `UPDATE queries SET status = 'expired' WHERE team_id = ? AND query_id = ?`,
+      [link.local_team_id, link.local_query_id]);
+
+    expect(await processor.scan()).toContainEqual({
+      messageId: e.messageId, action: 'redispatched_abandoned_job',
+    });
+    expect(await messageStatus(e.messageId)).toBe('processing');
+  });
+
+  it('adopts an orphaned job owner rather than deadlocking after a crash and lead change', async () => {
+    const e = envelope({ destination: { kind: 'team' } });
+    await accept(e);
+    const messagePk = (await q<{ id: string }>(
+      db, `SELECT id FROM interteam_messages WHERE message_id = ?`, [e.messageId],
+    ))[0]!.id;
+
+    // Simulate a crash between job creation and linkage: the job exists,
+    // owned by the lead at that moment, with no interteam_processing row.
+    await q(
+      db,
+      `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
+       VALUES (?, ?, ?, 'null', 'pending', ?, 'agent', ?)`,
+      [destTeam, InterTeamProcessor.localQueryId(messagePk), lead, Date.now(), lead],
+    );
+    // The lead then changes; a naive resolver would insist on the new lead.
+    const newLead = await addAgent(destTeam, 'later-lead');
+    await q(db, `UPDATE teams SET lead_agent_id = ? WHERE id = ?`, [newLead, destTeam]);
+
+    expect(await processor.scan()).toContainEqual({ messageId: e.messageId, action: 'dispatched' });
+    expect(await messageStatus(e.messageId)).toBe('processing');
+    const link = (await q<{ handler_agent_id: string }>(
+      db,
+      `SELECT p.handler_agent_id FROM interteam_processing p
+       JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?`,
+      [e.messageId],
+    ))[0]!;
+    expect(link.handler_agent_id).toBe(lead);
+  });
+
+  it('bounds how many messages one scan dispatches', async () => {
+    const bounded = new InterTeamProcessor(db, {
+      dispatchFn: async () => {},
+      maxConcurrentDispatch: 2,
+    });
+    for (let i = 0; i < 5; i++) {
+      await accept(envelope({ destination: { kind: 'agent_id', agentId: worker }, body: { i } }));
+    }
+    const actions = await bounded.scan();
+    expect(actions.filter((a) => a.action === 'dispatched')).toHaveLength(2);
+    expect(actions.some((a) => a.action === 'waiting_capacity')).toBe(true);
+    expect((await q(db, `SELECT id FROM interteam_messages WHERE status = 'processing'`))).toHaveLength(2);
+  });
+
+  it('rolls back the job row when linkage fails, leaving no orphan', async () => {
+    const e = envelope({ destination: { kind: 'agent_id', agentId: worker } });
+    await accept(e);
+    const messagePk = (await q<{ id: string }>(
+      db, `SELECT id FROM interteam_messages WHERE message_id = ?`, [e.messageId],
+    ))[0]!.id;
+    // Pre-create the link row so the INSERT inside the transaction conflicts.
+    await q(
+      db,
+      `INSERT INTO interteam_processing (message_pk, local_team_id, local_query_id, handler_agent_id, created_at, updated_at)
+       VALUES (?, ?, 'placeholder', ?, ?, ?)`,
+      [messagePk, destTeam, worker, Date.now(), Date.now()],
+    );
+
+    await expect(processor.scan()).rejects.toThrow();
+    // The query row must not survive the rolled-back transaction.
+    expect(await q(
+      db, `SELECT query_id FROM queries WHERE query_id = ?`,
+      [InterTeamProcessor.localQueryId(messagePk)],
+    )).toHaveLength(0);
+  });
+
   it('fails a processing direct message when its pinned recipient is deleted mid-flight', async () => {
     const e = envelope({ destination: { kind: 'agent_id', agentId: worker } });
     await accept(e);

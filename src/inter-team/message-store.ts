@@ -356,11 +356,25 @@ export class InterteamMessageStore {
     localQueryId: string;
     handlerAgentId: string;
     now?: number;
+    /**
+     * Creates the durable local job inside this transaction, so the query
+     * row, the link, and the `processing` transition commit or roll back
+     * together. A crash can no longer leave a job owned by one handler and
+     * an unlinked message resolving to another.
+     */
+    ensureJob?: (tx: DbAdapter) => Promise<void>;
+    /** Allows re-linking a message that is already processing (job replacement). */
+    allowRelink?: boolean;
   }): Promise<void> {
     const now = input.now ?? Date.now();
     await inTransaction(this.db, async (tx) => {
       const message = await this.messageByIdentity(tx, input.submitterNodeId, input.messageId);
-      if (message.status !== 'accepted') throw new Error('interteam_transition_invalid');
+      const expected = input.allowRelink ? ['accepted', 'processing'] : ['accepted'];
+      if (!expected.includes(message.status)) throw new Error('interteam_transition_invalid');
+      if (input.ensureJob) await input.ensureJob(tx);
+      if (input.allowRelink) {
+        await query(tx, `DELETE FROM interteam_processing WHERE message_pk = ?`, [message.id]);
+      }
       const durableQuery = await query<{ query_id: string }>(
         tx,
         `SELECT query_id FROM queries

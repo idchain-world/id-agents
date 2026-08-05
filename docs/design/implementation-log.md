@@ -521,3 +521,48 @@ Both mis-addressed-code rulings confirmed by cto and kept: destinationNodeId mis
 = target_identity_missing; envelope/transport disagreement = transport-layer
 source_context_mismatch, not added to the frozen set. Suites: commit-8 13/13, all
 inter-team repos + E2E 131/131, typecheck green.
+
+## Commits 9/10 fix-forward — production wiring, atomic linkage, abandoned jobs, dispatch bound
+
+cto's commits 7-9 review (task review-interteam-commits-7-9) raised four items. Commit 7
+was approved. Items 1-3 and the processor half of item 4 are fixed here; item 4's
+acceptance-capacity half was already fixed in 04abf13, which crossed with the review.
+
+1. **No production wiring.** The processor's default dispatcher was a no-op, so a
+   `queries` row never woke a Claude/Codex runtime. The manager now supplies
+   `deliverInterteamWork`, which forwards to the handling agent's `/talk` through the
+   same `resolveTargetAgent`/`forwardToAgent` path `/talk-to` uses, then repoints both
+   the `queries` row and the `interteam_processing` link at the runtime's own query ID
+   so replies route normally and the reconciler observes the real job. Delivery failure
+   (unreachable runtime, resolution error, thrown fetch) is logged and swallowed: the
+   message stays `processing` with its link intact and a later scan retries — an
+   unreachable runtime is a temporary condition, never a protocol outcome. Covered by
+   a new integration test with a stand-in runtime that asserts `/talk` was really
+   called, the link was repointed, and completing the runtime query completes the
+   inter-team message. The local E2E injects a stub dispatcher because its fixture
+   agents have no listener; that substitution is now explicit in the file.
+
+2. **Split transactions.** Query creation and linkage were separate, so a crash between
+   them could strand a job owned by lead A while restart resolved lead B, deadlocking
+   `recordProcessing` forever. `recordProcessing` now takes an `ensureJob` callback run
+   inside its transaction, making job row + link + `processing` transition atomic, and
+   the processor adopts an existing job's owner instead of a freshly resolved one, so
+   the deterministic ID cannot deadlock even if a link is missing. Two tests: orphaned
+   job adopted across a lead change; job row rolled back when linkage fails.
+
+3. **Abandoned local jobs.** `cancelled` (agent stop) and `expired` (sweeper) were
+   ignored, leaving the message `processing` forever and unable to restart because its
+   deterministic query already existed. The reconciler now treats those as abandoned,
+   not as answers: it drops the dead job and re-dispatches under a fresh query ID when
+   a handler is available, and otherwise leaves the message and its link untouched
+   until one returns. The message stays `processing` rather than reverting, because the
+   protocol has no `accepted <- processing` transition and the receiver still owns the
+   work; the dead link is deliberately retained while waiting so it is not mistaken for
+   lost evidence and driven to `unknown`. Two tests (cancelled and expired).
+
+4. **Processor dispatch bound.** `maxConcurrentDispatch` (default 4) caps dispatches per
+   scan; over-cap messages report `waiting_capacity` and wait for the next pass. Tested.
+
+Suites: processor 14/14, acceptance 13/13, full regression 942 tests across repos, unit,
+inter-team integration, and middleware-adjacent suites; typecheck and build green. No
+schema change; the live database remains untouched.
