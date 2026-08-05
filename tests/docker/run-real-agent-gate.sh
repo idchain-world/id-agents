@@ -73,6 +73,42 @@ mgmt_team() { # container, team, method, path, [json body], [agent id]
 
 jqf() { node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);const v=$1;process.stdout.write(v===undefined||v===null?'':String(v));}catch(e){process.stdout.write('PARSE_ERROR:'+s.slice(0,200));}})"; }
 
+# This host's /bin/bash is 3.2.57, which mis-parses a command substitution whose
+# argument list contains a single-quoted string with parentheses, and defers the
+# error to run time so `bash -n` still passes. The answer expression therefore
+# lives in a function body rather than at a call site.
+answer_text() {
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);const v=typeof j.result==="string"?j.result:JSON.stringify(j.result);process.stdout.write(v===undefined||v===null?"":String(v));}catch(e){process.stdout.write("PARSE_ERROR:"+s.slice(0,200));}})'
+}
+
+# bash 3.2 mis-parses a command substitution whose argument list contains a
+# single-quoted string with parentheses, and defers the error to run time so
+# `bash -n` still passes. Every inline node script with that shape therefore
+# lives in a function body.
+diagnose_b() {
+  docker exec "$1" node -e '
+    const {SqliteAdapter}=require("/app/dist/db/sqlite-adapter.js");
+    const db=new SqliteAdapter(process.env.HOME+"/.id-agents/id-agents.db");
+    (async () => {
+      const q = await db.query("SELECT query_id,status,error,substr(result,1,200) AS r FROM queries ORDER BY created DESC LIMIT 3");
+      const m = await db.query("SELECT message_id,status,failure_code FROM interteam_messages");
+      process.stdout.write(JSON.stringify({queries:q.rows, messages:m.rows}, null, 1));
+    })();' 2>/dev/null | head -30
+  docker exec "$1" sh -c 'tail -12 /tmp/answerer.log' 2>/dev/null | head -14
+}
+
+read_job() {
+  docker exec -e GATE_MSG="$2" "$1" node -e '
+    const {SqliteAdapter}=require("/app/dist/db/sqlite-adapter.js");
+    const db=new SqliteAdapter(process.env.HOME+"/.id-agents/id-agents.db");
+    (async () => {
+      const link = await db.query("SELECT p.local_query_id, p.handler_agent_id FROM interteam_processing p JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?", [process.env.GATE_MSG]);
+      if (!link.rows[0]) return process.stdout.write(JSON.stringify({error:"no_link"}));
+      const q = await db.query("SELECT agent_id, status, prompt, result FROM queries WHERE query_id = ?", [link.rows[0].local_query_id]);
+      process.stdout.write(JSON.stringify({ handler: link.rows[0].handler_agent_id, row: q.rows[0] || null }));
+    })();' 2>/dev/null
+}
+
 TOKEN=$(grep -oE 'sk-ant-oat[0-9]+-[A-Za-z0-9_-]+' "$HOME/.claude-container-token" 2>/dev/null | head -1)
 if [ -z "$TOKEN" ]; then echo "no Claude token available on this host"; exit 1; fi
 
@@ -158,22 +194,22 @@ fi
 
 echo "== operator configuration on the receiving side =="
 mgmt_team "$B" beta-team PUT /inter-team/config/policy '{"policy":"open"}' >/dev/null
-LEAD_BODY=$(node -e 'process.stdout.write(JSON.stringify({agentId:process.argv[1]}))' "$B_AGENT")
+LEAD_BODY="{\"agentId\":\"$B_AGENT\"}"
 LEAD=$(mgmt_team "$B" beta-team PUT /inter-team/config/lead "$LEAD_BODY")
 check "node B assigned its real agent as team lead" "$(printf '%s' "$LEAD" | jqf 'j.settings.leadAgentId')" "$B_AGENT"
 check "node B's inbound policy is open" "$(mgmt_team "$B" beta-team GET /inter-team/config | jqf 'j.settings.inboundPolicy')" "open"
 
 B_TEAM="$(mgmt_team "$B" beta-team GET /inter-team/config | jqf 'j.settings.teamId')"
 echo "== node A points at node B =="
-ROUTE_BODY=$(node -e 'process.stdout.write(JSON.stringify({baseUrl:process.argv[1]}))' "http://beta:$FED_PORT")
+ROUTE_BODY="{\"baseUrl\":\"http://beta:$FED_PORT\"}"
 ROUTE=$(mgmt_team "$A" alpha-team PUT "/inter-team/config/peer-routes/$B_NODE" "$ROUTE_BODY")
 check "node A holds one peer route pinned to node B" "$(printf '%s' "$ROUTE" | jqf 'j.route.nodeId')" "$B_NODE"
-CONTACT_BODY=$(node -e 'process.stdout.write(JSON.stringify({aliasDisplay:"beta",remoteNodeId:process.argv[1],remoteTeamId:process.argv[2]}))' "$B_NODE" "$B_TEAM")
+CONTACT_BODY="{\"aliasDisplay\":\"beta\",\"remoteNodeId\":\"$B_NODE\",\"remoteTeamId\":\"$B_TEAM\"}"
 CONTACT=$(mgmt_team "$A" alpha-team POST /inter-team/config/contacts "$CONTACT_BODY")
 check "node A's team owns a contact pinned to B's team" "$(printf '%s' "$CONTACT" | jqf 'j.contact.remoteTeamId')" "$B_TEAM"
 
 echo "== the real question crosses the node boundary =="
-SEND_BODY=$(node -e 'process.stdout.write(JSON.stringify({address:"team:beta",body:process.argv[1]}))' "$QUESTION")
+SEND_BODY="{\"address\":\"team:beta\",\"body\":\"$QUESTION\"}"
 SEND=$(mgmt_team "$A" alpha-team POST /inter-team/send "$SEND_BODY" "$A_AGENT")
 printf 'SEND_RESPONSE: %s\n' "$(printf '%s' "$SEND" | head -c 300)"
 CONV="$(printf '%s' "$SEND" | jqf 'j.conversationId')"
@@ -192,18 +228,10 @@ for _ in $(seq 1 120); do
 done
 if [ "$STATE" != "completed" ]; then
   echo "--- diagnosis: node B job state ---"
-  docker exec "$B" node -e "
-    const {SqliteAdapter}=require('/app/dist/db/sqlite-adapter.js');
-    const db=new SqliteAdapter(process.env.HOME+'/.id-agents/id-agents.db');
-    (async () => {
-      const q = await db.query('SELECT query_id,status,error,substr(result,1,200) AS r FROM queries ORDER BY created DESC LIMIT 3');
-      const m = await db.query('SELECT message_id,status,failure_code FROM interteam_messages');
-      process.stdout.write(JSON.stringify({queries:q.rows, messages:m.rows}, null, 1));
-    })();" 2>/dev/null | head -30
-  docker exec "$B" sh -c 'tail -12 /tmp/answerer.log' 2>/dev/null | head -14
+  diagnose_b "$B"
 fi
 check "node A collected a completed result from node B" "$STATE" "completed"
-ANSWER="$(printf '%s' "$COLLECTED" | jqf 'typeof j.result === "string" ? j.result : JSON.stringify(j.result)')"
+ANSWER=$(printf '%s' "$COLLECTED" | answer_text)
 printf 'ANSWER_FROM_REMOTE_AGENT: %s\n' "$ANSWER"
 contains "the remote agent answered the question correctly" "$ANSWER" "Paris"
 
@@ -213,15 +241,7 @@ check "repeated collection is non-consuming" "$AGAIN" "completed"
 
 echo "== the answer came from the agent, not from a test endpoint =="
 # The durable job on B must be owned by the spawned agent and hold its output.
-JOB=$(docker exec "$B" node -e "
-  const {SqliteAdapter}=require('/app/dist/db/sqlite-adapter.js');
-  const db=new SqliteAdapter(process.env.HOME+'/.id-agents/id-agents.db');
-  (async () => {
-    const link = await db.query(\"SELECT p.local_query_id, p.handler_agent_id FROM interteam_processing p JOIN interteam_messages m ON m.id = p.message_pk WHERE m.message_id = ?\", ['$MSG']);
-    if (!link.rows[0]) return process.stdout.write(JSON.stringify({error:'no_link'}));
-    const q = await db.query('SELECT agent_id, status, prompt, result FROM queries WHERE query_id = ?', [link.rows[0].local_query_id]);
-    process.stdout.write(JSON.stringify({ handler: link.rows[0].handler_agent_id, row: q.rows[0] || null }));
-  })();" 2>/dev/null)
+JOB=$(read_job "$B" "$MSG")
 check "the durable job was handled by the spawned agent" "$(printf '%s' "$JOB" | jqf 'j.handler')" "$B_AGENT"
 check "the job row is owned by that agent" "$(printf '%s' "$JOB" | jqf 'j.row && j.row.agent_id')" "$B_AGENT"
 check "the job completed in B's database" "$(printf '%s' "$JOB" | jqf 'j.row && j.row.status')" "completed"
