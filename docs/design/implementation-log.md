@@ -694,3 +694,24 @@ Verification: all 128 inter-team unit, repository, integration, and local E2E te
 pass; the core TypeScript build passes; `git diff --check` is clean. Seniordev
 independently returned SHIP after 170 relevant tests and `tsc`. No live database was
 opened or migrated.
+
+### Recipient-visible sender claim follow-up
+
+The receiver now renders a non-null `claimed_sender_name` into the recipient agent's
+actual prompt as an explicitly unverified claim. Rendering happens once in the async
+processor and is reused for both the durable `queries.prompt` audit record and the
+runtime `/talk` delivery, including abandoned-job redispatch. Null claims add no
+attribution and no placeholder.
+
+The remote claim is attacker-controlled display text. The renderer strips control,
+format, bidi, and newline code points, bounds the remaining value to 80 Unicode code
+points, and escapes framing punctuation before placing it inside one fixed prefix
+line. The runtime `from` field remains `inter-team`; the claim cannot become runtime
+identity. This is a display/audit-only change: routing, admission, ordering, replay,
+deduplication, capacity, and collection still use the existing fields and the
+contract test that changes `senderName` across a replay remains unchanged.
+
+Verification for this follow-up: all 130 tests in the 13-file inter-team suite pass
+under Node 22; `tsc --noEmit` and `git diff --check` pass. Seniordev independently
+returned SHIP after 172 relevant tests and TypeScript verification. All database tests
+used in-memory or temporary SQLite files; no live database was opened or migrated.

@@ -47,6 +47,42 @@ export interface DispatchInput {
   claimedSenderName: string | null;
   messageId: string;
   body: unknown;
+  /** Agent-visible body with any display-only sender claim safely framed. */
+  renderedPrompt: string;
+}
+
+/** Bound attacker-controlled attribution before it reaches an agent prompt. */
+export const MAX_CLAIMED_SENDER_DISPLAY_CODE_POINTS = 80;
+export const MAX_CLAIMED_SENDER_DISPLAY_LENGTH = 160;
+
+/**
+ * Keep ordinary name characters readable while escaping framing punctuation.
+ * Control, format (including bidi override), surrogate, and newline code points
+ * are removed before the display bound is applied. This value remains an
+ * unverified string; it is never suitable for identity or routing decisions.
+ */
+export function sanitizeClaimedSenderName(claimedSenderName: string | null): string | null {
+  if (claimedSenderName === null) return null;
+  const stripped = claimedSenderName.replace(/\p{C}/gu, '').replace(/\s+/gu, ' ').trim();
+  const bounded = Array.from(stripped).slice(0, MAX_CLAIMED_SENDER_DISPLAY_CODE_POINTS);
+  if (bounded.length === 0) return null;
+  let sanitized = '';
+  for (const character of bounded) {
+    const rendered = /^[\p{L}\p{M}\p{N} ._@+-]$/u.test(character)
+      ? character
+      : `\\u{${character.codePointAt(0)!.toString(16).toUpperCase()}}`;
+    if (sanitized.length + rendered.length > MAX_CLAIMED_SENDER_DISPLAY_LENGTH) break;
+    sanitized += rendered;
+  }
+  return sanitized || null;
+}
+
+/** Render the receiver's display-only claim without changing message identity. */
+export function renderInterTeamPrompt(body: unknown, claimedSenderName: string | null): string {
+  const bodyText = typeof body === 'string' ? body : (JSON.stringify(body ?? null) ?? 'null');
+  const sanitizedClaim = sanitizeClaimedSenderName(claimedSenderName);
+  if (sanitizedClaim === null) return bodyText;
+  return `[inter-team message; sender claims to be "${sanitizedClaim}"; unverified]\n${bodyText}`;
 }
 
 /** Local job states that mean the handler will never answer this job. */
@@ -184,6 +220,8 @@ export class InterTeamProcessor {
       }
 
       const localQueryId = InterTeamProcessor.localQueryId(message.id);
+      const body = message.request_body === null ? null : parseJsonColumn(message.request_body);
+      const renderedPrompt = renderInterTeamPrompt(body, message.claimed_sender_name);
       // A crash between job creation and linkage could previously strand the
       // job with an earlier handler. Adopt an existing job's owner instead of
       // resolving a new one, so the deterministic ID can never deadlock.
@@ -211,7 +249,7 @@ export class InterTeamProcessor {
             `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
              VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)
              ON CONFLICT (team_id, query_id) DO NOTHING`,
-            [handlerTeamId, localQueryId, handlerAgentId, message.request_body ?? 'null', now, handlerAgentId],
+            [handlerTeamId, localQueryId, handlerAgentId, renderedPrompt, now, handlerAgentId],
           );
         },
       });
@@ -222,7 +260,8 @@ export class InterTeamProcessor {
         submitterNodeId: message.submitter_node_id,
         claimedSenderName: message.claimed_sender_name,
         messageId: message.message_id,
-        body: message.request_body === null ? null : parseJsonColumn(message.request_body),
+        body,
+        renderedPrompt,
       });
       dispatchedThisPass += 1;
       actions.push({ messageId: message.message_id, action: 'dispatched' });
@@ -258,6 +297,8 @@ export class InterTeamProcessor {
     }
 
     const localQueryId = `${InterTeamProcessor.localQueryId(message.id)}_r${now}`;
+    const body = message.request_body === null ? null : parseJsonColumn(message.request_body);
+    const renderedPrompt = renderInterTeamPrompt(body, message.claimed_sender_name);
     await query(
       this.db,
       `DELETE FROM queries WHERE team_id = ? AND query_id = ?`,
@@ -277,7 +318,7 @@ export class InterTeamProcessor {
           `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
            VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)
            ON CONFLICT (team_id, query_id) DO NOTHING`,
-          [target.teamId, localQueryId, target.agentId, message.request_body ?? 'null', now, target.agentId],
+          [target.teamId, localQueryId, target.agentId, renderedPrompt, now, target.agentId],
         );
       },
     });
@@ -288,7 +329,8 @@ export class InterTeamProcessor {
       submitterNodeId: message.submitter_node_id,
       claimedSenderName: message.claimed_sender_name,
       messageId: message.message_id,
-      body: message.request_body === null ? null : parseJsonColumn(message.request_body),
+      body,
+      renderedPrompt,
     });
     return { messageId: message.message_id, action: 'redispatched_abandoned_job' };
   }

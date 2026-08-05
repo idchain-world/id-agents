@@ -222,9 +222,13 @@ agent. The origin additionally records, per accepted message, the sending agent'
 immutable ID and its name at send time. Only the name also travels in the request
 envelope; the ID remains local because another node's agent namespace cannot resolve
 it meaningfully. The receiver treats the name as an unverifiable claim and may use it
-only for display and audit. Neither the origin attribution nor the received claim may
-influence routing, admission, ordering, deduplication, capacity, collection
-authorization, or any other authority decision. The descriptor remains unchanged.
+only for display and audit. Before local dispatch, the processor renders a bounded,
+control-free, single-line unverified-claim prefix into the recipient agent's prompt;
+a null claim renders no attribution. The prefix is display/audit metadata only and
+never changes the fixed inter-team runtime identity. Neither the origin attribution
+nor the received claim may influence routing, admission, ordering, deduplication,
+capacity, collection authorization, or any other authority decision. The descriptor
+remains unchanged.
 An admin-principal send has null attribution and a null wire claim; no placeholder is
 fabricated.
 

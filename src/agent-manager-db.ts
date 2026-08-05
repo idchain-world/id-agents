@@ -1894,8 +1894,7 @@ export class AgentManagerDb {
         console.error(`[Manager] inter-team dispatch could not resolve ${agent.name}: ${resolved.error}`);
         return;
       }
-      const prompt = typeof input.body === 'string' ? input.body : JSON.stringify(input.body ?? null);
-      result = await this.forwardToAgent(resolved.targetUrl, prompt, 'inter-team');
+      result = await this.forwardToAgent(resolved.targetUrl, input.renderedPrompt, 'inter-team');
     } catch (error) {
       // An unreachable runtime is a temporary condition, never a protocol
       // outcome: the message stays `processing` and a later scan retries.

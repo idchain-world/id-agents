@@ -134,7 +134,11 @@ describe('production inter-team dispatch wiring', () => {
 
     const send = await fetch(`${baseUrl}/inter-team/send`, {
       method: 'POST',
-      headers: { ...admin('wiring-origin'), 'X-Id-Agent': callerId },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Id-Team': 'wiring-origin',
+        'X-Id-Agent': callerId,
+      },
       body: JSON.stringify({ address: 'team:peer/handler', body: { ask: 'real-work' } }),
     });
     expect(send.status).toBe(202);
@@ -151,7 +155,9 @@ describe('production inter-team dispatch wiring', () => {
 
     // The runtime was actually called — a queries row alone would not do this.
     expect(talkCalls).toHaveLength(1);
-    expect(JSON.parse(talkCalls[0]!.message)).toEqual({ ask: 'real-work' });
+    expect(talkCalls[0]!.message).toBe(
+      '[inter-team message; sender claims to be "caller"; unverified]\n{"ask":"real-work"}',
+    );
     expect(talkCalls[0]!.from).toBe('inter-team');
     expect(link.local_query_id).toBe(RUNTIME_QUERY_ID);
     const job = (await db.adapter.query(
