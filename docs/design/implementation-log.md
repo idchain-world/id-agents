@@ -800,3 +800,38 @@ send to it is refused `target_closed`; a route aimed at the wrong manager return
 every connection went from the origin to the destination, never the reverse. Full inter-team
 regression 213 tests across 22 files, typecheck clean. No configured federation bind exists yet.
 Live database untouched.
+
+## Commit 16 — configured federation listener and portability, container gate UNPROVEN
+
+`resolveFederationListenerConfig` reads `ID_FEDERATION_BIND_ADDRESS`,
+`ID_FEDERATION_BIND_PORT`, and `ID_FEDERATION_ALLOW_WILDCARD_BIND`. Absent configuration means
+disabled, which is why every existing deployment is unaffected: no socket is opened and the
+loopback management API is never a fallback federation endpoint. A half-configured bind is
+refused rather than completed with a default, because guessing half of a trust boundary is how a
+port ends up somewhere nobody intended. The wildcard is refused unless separately acknowledged,
+and the exact active bind, wildcard exposure included, is printed at startup. The manager starts
+the federation app on its own server and closes it on stop; management stays on `127.0.0.1`.
+
+*Gate:* partially met. Proven locally, 6 tests in
+`tests/integration/interteam-federation-listener.test.ts`: disabled by default; incomplete,
+non-numeric, and out-of-range binds refused; wildcard refused without the override and accepted
+with it while naming the exposure; a non-wildcard bind reporting its exact address; the federation
+surface returning 404 for every management path including `/health`, `/agents`, `/tasks`,
+`/inter-team/config`, and `/files/list`, and treating `X-Id-Admin` as no authority at all while
+still identifying the responding node in the refusal; and topology portability proven as a
+database and configuration invariant, where the same databases move to a different bind and route
+value with identity, contact, outbound, conversation, message, and receipt rows exactly equal, a
+completed result still collectable, an in-flight conversation continuing at position 1 under the
+same conversation ID, and a fresh database at the same address rejected as `peer_node_mismatch`
+rather than silently inheriting the old contacts.
+
+**UNPROVEN, and not approximated:** the two-container half of the gate. The Docker daemon is not
+running on this machine, `docker info` fails, compose is unavailable, and the brief forbids
+starting it. Specifically unproven: two node containers with distinct durable databases on one
+private Docker network, each management API observed loopback-only from outside its container,
+worker ports unreachable off-node, and a destination restart between the send and the collect.
+The tailnet leg of the portability move is also unproven, because it needs a second host, which
+the design itself places outside ID Agents as infrastructure provisioning. The invariant those
+steps exist to prove, address independence, is proven above by moving between two local binds,
+which exercises the same code path over the same rows. Full regression at this commit: 970 tests
+across 76 files, core and TUI builds clean. Live database untouched.

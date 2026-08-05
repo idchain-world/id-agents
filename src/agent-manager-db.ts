@@ -101,6 +101,13 @@ import {
 import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
 import { InterteamMessageStore } from './inter-team/message-store.js';
 import { PeerRouteStore, PeerRouteError } from './inter-team/peer-routes.js';
+import { createFederationApp } from './inter-team/federation-app.js';
+import { HttpFederationTransport } from './inter-team/federation-client.js';
+import {
+  describeFederationBind,
+  resolveFederationListenerConfig,
+  type FederationListenerConfig,
+} from './inter-team/federation-config.js';
 import { parseInterTeamAddress, type Destination } from './inter-team/protocol.js';
 import { CheckinService } from './checkins/checkin-service.js';
 import {
@@ -392,6 +399,8 @@ export class AgentManagerDb {
   private interteamOrigin: InterTeamOriginClient;
   private interteamProcessor: InterTeamProcessor;
   private interteamTimer: ReturnType<typeof setInterval> | null = null;
+  private federationServer: HttpServer | null = null;
+  private federationConfig: FederationListenerConfig = { enabled: false };
   private runningServers: Map<string, AgentRestServer> = new Map(); // key: `${teamId}:${agentId}`
 
   /**
@@ -469,6 +478,8 @@ export class AgentManagerDb {
       interteamConversationListBounds?: { maxConversations: number; maxEncodedBytes: number };
       /** Override inter-team work delivery (for tests). */
       interteamDispatchFn?: (input: InterTeamDispatchInput) => Promise<void>;
+      /** Override the federation listener configuration (for tests). */
+      federationConfig?: FederationListenerConfig;
     },
   ) {
     this.baseWorkDir = baseWorkDir;
@@ -478,8 +489,12 @@ export class AgentManagerDb {
     this.interteamAcceptance = new InterTeamAcceptanceService(db.adapter, {
       bounds: opts?.interteamBounds,
     });
+    // Startup refuses an invalid or unacknowledged-wildcard bind before any
+    // socket exists, so a misconfiguration cannot half-expose the node.
+    this.federationConfig = opts?.federationConfig ?? resolveFederationListenerConfig();
     this.interteamOrigin = new InterTeamOriginClient(db.adapter, this.interteamAcceptance, {
       conversationListBounds: opts?.interteamConversationListBounds,
+      transport: new HttpFederationTransport(db.adapter),
     });
     this.interteamProcessor = new InterTeamProcessor(db.adapter, {
       dispatchFn: opts?.interteamDispatchFn ?? ((input) => this.deliverInterteamWork(input)),
@@ -8178,6 +8193,21 @@ export class AgentManagerDb {
         this.handleWebSocketConnection(ws, req);
       });
 
+      // The federation listener is a separate trust surface with its own bind.
+      // Disabled by default: with no bind configured no socket is opened, and
+      // the loopback management API is never a fallback federation endpoint.
+      console.log(`[Manager] ${describeFederationBind(this.federationConfig)}`);
+      if (this.federationConfig.enabled) {
+        const federationApp = createFederationApp(this.db.adapter, this.interteamAcceptance, {
+          onAccepted: () => {
+            void this.interteamProcessor.scan().catch((error) =>
+              console.error('[Manager] inter-team processor scan failed:', error));
+          },
+        });
+        this.federationServer = createHttpServer(federationApp);
+        this.federationServer.listen(this.federationConfig.port, this.federationConfig.address);
+      }
+
       // Inter-team recovery + steady-state tick. Startup recovery and the
       // periodic pass are the same scan; the post-accept kick covers latency.
       void this.interteamProcessor.scan().catch((error) =>
@@ -8315,6 +8345,10 @@ export class AgentManagerDb {
     if (this.interteamTimer) {
       clearInterval(this.interteamTimer);
       this.interteamTimer = null;
+    }
+    if (this.federationServer) {
+      await new Promise<void>((res) => this.federationServer!.close(() => res()));
+      this.federationServer = null;
     }
     if (this.httpServer) {
       await new Promise<void>((res) => this.httpServer!.close(() => res()));
