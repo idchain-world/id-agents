@@ -271,3 +271,57 @@ was exercised only in memory, in disposable PostgreSQL, and on a disposable SQLi
 Plan defects found: none. The archived pre-amendment plan inferred an inbox handler from a
 unique org lead; the current design explicitly forbids that inference, so commit 4 leaves
 every existing and newly created team lead null until an operator assigns it.
+
+## Commit 5 — durable conversations, messages, and retention
+
+Built:
+
+- A gapless, origin-submitted conversation stream keyed by opaque origin node and
+  conversation IDs. Participants, destination variant, accepted direct-agent resolution,
+  next position, and predecessor head are pinned durably; there is deliberately no close
+  state and no reverse-route table because V1 results are pull-only.
+- Durable messages with submitter/message idempotency, immutable comparison identity,
+  accepted/processing/completed/failed/unknown state, last confirmed state, explicit result
+  presence, terminal clocks, and retained/compacted tiers. Database triggers require every
+  insert to begin accepted and require a durable processing mapping before processing.
+- A one-to-one message/query processing map and permanent status-only receipts. Mapping IDs
+  have no agent or query foreign keys, so history survives handler deletion. Terminal
+  compaction removes both message payload copies and the linked query row at 30 days;
+  message deletion at 365 days preserves the receipt. Accepted, processing, and unknown
+  work is never reaped.
+- Transactional acceptance, replay/conflict checks before mutable validation, participant
+  binding, ordering, durable origin ID allocation, state transitions, tier-aware collection,
+  capped retention sweeps, and an actual `pragma_auto_vacuum = 2` gate before bounded
+  incremental vacuum. The full locking VACUUM remains an explicitly named operator action.
+- Normal team deletion is blocked while either participant owns active work. Force deletion
+  resolves it atomically to failed with the dedicated `owner_force_deleted` code while
+  preserving audit/dedup history; collection after a local participant team is gone returns
+  conversation-not-found and never retargets.
+
+Gate proof:
+
+- Focused SQLite gate: 11 tests passed; TypeScript core/TUI build and `git diff --check`
+  passed.
+- Disposable PostgreSQL 16 parity: 21 tests passed across SQLite and PostgreSQL, including
+  database-level transition constraints, retention, deletion, and opaque participant IDs.
+- Full migration was run twice on a disposable copy of the pre-org live rollback backup:
+  teams remained 9, agents remained 51, the singleton identity remained 1, and contacts,
+  conversations, messages, and receipts remained empty. No commit-4 or commit-5 schema was
+  applied to the live database.
+- Repository regression gate passed 1,273 tests across 116 files with 60 skipped. One
+  pre-existing order-sensitive rebuild test failed both in the full run and in isolation:
+  it inserts two agents in the same second, lists them by `created_at DESC` without a tie
+  breaker, and assigns a one-shot mock failure to whichever tied row SQLite returns first.
+  Commit 5 does not modify that test, the agent repository, or rebuild behavior.
+- Seniordev reviewed the complete schema/store/tests, independently reran the focused suite,
+  and returned `APPROVE`. The review's suggested structural hardening was included: a
+  compacted tier is accepted only for completed or failed rows in both dialects.
+
+Could not do: commit 5 was not applied to the live database; authorization covered only the
+commit-3 org migration. The unrelated tied-timestamp rebuild test was documented rather
+than changed outside this commit's scope.
+
+Plan defects found and resolved with seniordev: linked query payload must be deleted at the
+30-day compaction boundary, force-delete needs a distinct stable outcome, and incremental
+vacuum must inspect SQLite's actual pragma rather than trusting configuration. All three are
+implemented and covered by parity tests.
