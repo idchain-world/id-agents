@@ -363,3 +363,11 @@ org-backfill suites; full unit suite 769/769; build green. Granular group/subtre
 endpoints remain deferred until they can meet the explicit preview-and-audit rule; the
 whole-PUT enumerates destructive diffs in response and audit instead. Not applied to the
 live database; commit 7 not started.
+
+Recovery coordination note: the manager rerouted commit 6 to seniordev while cto's long
+turn was swept, so both agents independently produced overlapping test surfaces in the
+shared worktree. Seniordev kept cto's implementation unchanged, committed the broader HTTP
+suite, and left cto's additional tests for a reviewed follow-up. Those supplementary tests
+add a positive-control audit failure that proves the contact mutation rolls back, plus real
+PostgreSQL 16 parity. The combined commit-4/5/6/org gate passed 90 tests across both
+dialects; the supplementary SQLite service/API gate passed 9 tests.
