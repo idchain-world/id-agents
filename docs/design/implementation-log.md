@@ -760,3 +760,43 @@ envelope; the origin index works with zero destination rows in the database. Tes
 `tests/repos/interteam-peer-routes-outbound.test.ts`. Full inter-team regression 204 tests across
 21 files, typecheck clean. No federation listener is opened by any process in this commit. Live
 database untouched.
+
+## Commit 15 — federation contract and two-manager fault tests
+
+The wire, both halves, behind the commit-14 seam. `createFederationApp` is a separate express
+app from the management API exposing only submission, collection by conversation and message ID,
+and descriptor reads by immutable team ID. It interprets no `X-Id-Admin`, `X-Id-Team`, or
+`X-Id-Agent` header as authority: the asserted origin arrives in dedicated federation headers and
+is trusted because reachability is trusted, which is the V1 assumption and not authentication.
+Every response, success or failure, carries this node's `nodeId` and protocol version outside the
+operation result. `202` is returned only after the acceptance transaction commits.
+
+`HttpFederationTransport` is the outbound half. It resolves the route late on every attempt by
+pinned destination node ID, so an operator can move a peer without touching message identity, and
+it checks the responder identity before interpreting any outcome. A different node is
+`peer_node_mismatch` with the outcome discarded; a missing responder identity is
+`peer_response_invalid`; a peer 5xx is a transport failure rather than a protocol answer, because
+the origin cannot prove the receiver did not commit. Write attempts carry `outcomeUnknown` so a
+failed submission is recorded unknown and never replaced.
+
+The origin client now routes remote destinations through the transport in `submit`, and gains
+remote paths for continue, collect, and descriptor reads that use the commit-14 outbound record
+instead of destination rows that do not exist locally. A remote continuation refuses to mint past
+an unresolved earlier submission with `outbound_submission_unresolved`, which is the origin-local
+guard the design requires. The alias is added to a descriptor only after the responder identity
+and returned team ID are validated, so it never crosses the wire.
+
+*Gate:* met, proven by 9 tests in `tests/integration/interteam-federation-two-manager.test.ts`
+with two nodes on distinct databases, node IDs, team IDs, and work roots. A first send crosses and
+creates the destination row while the origin holds only its own record; the processing result is
+collected repeatedly and non-consumingly; a dropped `202` leaves the attempt unknown with the peer
+already committed, and an identical resubmission returns deduplicated with still exactly one
+destination message; an unresolved head blocks the next position and releases it once resolved,
+with the continuation landing at position 1; unauthorized and unknown collection are both
+`conversation_not_found`; a roster read crosses and keeps working against a closed team while a
+send to it is refused `target_closed`; a route aimed at the wrong manager returns
+`peer_node_mismatch`, changes no contact pin, and is not auto-healed; a disabled route returns
+`peer_route_unconfigured` with no network call at all; and a process-wide fetch recorder proves
+every connection went from the origin to the destination, never the reverse. Full inter-team
+regression 213 tests across 22 files, typecheck clean. No configured federation bind exists yet.
+Live database untouched.

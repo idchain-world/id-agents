@@ -6,6 +6,7 @@ import {
   automaticResubmissionAllowed,
   readRoster,
   rosterReadRateResult,
+  type CollectionResult,
   type Destination,
   type InterTeamRequestEnvelope,
   type RosterAgent,
@@ -82,6 +83,11 @@ export interface ConversationListEntry {
 export interface ConversationList {
   conversations: ConversationListEntry[];
 }
+
+/** Local collection keeps the frozen result; remote adds origin-local codes. */
+export type OriginCollectResult =
+  | { ok: true; value: CollectionResult }
+  | { ok: false; code: string };
 
 export type OriginSendResult =
   | {
@@ -179,9 +185,6 @@ export class InterTeamOriginClient {
     }, input.requestBody);
     if (!resolved.ok) return resolved;
     const localNodeId = await this.acceptance.localNodeId();
-    if (resolved.contact.remoteNodeId !== localNodeId) {
-      return { ok: false, code: 'peer_route_unconfigured' };
-    }
 
     const now = input.now ?? Date.now();
     const allocated = await this.store.allocateOriginIds(localNodeId, now);
@@ -211,7 +214,9 @@ export class InterTeamOriginClient {
   }): Promise<OriginSendResult> {
     const localNodeId = await this.acceptance.localNodeId();
     const binding = await this.ownedConversation(localNodeId, input.context.localTeamId, input.conversationId);
-    if (!binding) return { ok: false, code: 'conversation_not_found' };
+    if (!binding) {
+      return this.continueRemote(localNodeId, input);
+    }
 
     const now = input.now ?? Date.now();
     const allocated = await this.store.allocateOriginIds(localNodeId, now);
@@ -276,6 +281,11 @@ export class InterTeamOriginClient {
     // executes in production.
     await this.outbound.recordSubmission({ envelope: outboundEnvelope, now });
 
+    const localNodeId = await this.acceptance.localNodeId();
+    if (outboundEnvelope.destinationNodeId !== localNodeId) {
+      return this.submitRemote(outboundEnvelope, now);
+    }
+
     const outcome = await this.acceptance.accept({
       transport: { kind: 'same_manager', originTeamId: context.localTeamId },
       envelope: outboundEnvelope,
@@ -314,6 +324,99 @@ export class InterTeamOriginClient {
       };
     }
     return { ok: false, code: outcome.kind === 'error' ? outcome.code : outcome.reason };
+  }
+
+  /**
+   * Continue a conversation whose destination lives on another node. The
+   * binding comes from the origin's own outbound record, and a continuation is
+   * never minted past an earlier submission whose acceptance is still unknown:
+   * the origin must first collect or resubmit that envelope.
+   */
+  private async continueRemote(
+    localNodeId: string,
+    input: {
+      context: TrustedLocalSourceContext;
+      conversationId: string;
+      body: unknown;
+      now?: number;
+    },
+  ): Promise<OriginSendResult> {
+    const outboundConversation = await this.outbound.getConversation(localNodeId, input.conversationId);
+    if (!outboundConversation || outboundConversation.originTeamId !== input.context.localTeamId) {
+      return { ok: false, code: 'conversation_not_found' };
+    }
+    const unresolved = await this.outbound.firstUnresolvedSubmission(localNodeId, input.conversationId);
+    if (unresolved) {
+      return { ok: false, code: 'outbound_submission_unresolved' };
+    }
+
+    const now = input.now ?? Date.now();
+    const allocated = await this.store.allocateOriginIds(localNodeId, now);
+    const destination: Destination = outboundConversation.destinationKind === 'team'
+      ? { kind: 'team' }
+      : outboundConversation.destinationKind === 'agent_name'
+        ? { kind: 'agent_name', agentName: outboundConversation.destinationNameAtAcceptance! }
+        : { kind: 'agent_id', agentId: outboundConversation.destinationAgentId! };
+    return this.submit({
+      protocolVersion: INTER_TEAM_PROTOCOL_VERSION,
+      originNodeId: localNodeId,
+      originTeamId: input.context.localTeamId,
+      destinationNodeId: outboundConversation.destinationNodeId,
+      destinationTeamId: outboundConversation.destinationTeamId,
+      destination,
+      conversationId: input.conversationId,
+      messageId: allocated.messageId,
+      position: outboundConversation.nextPosition,
+      predecessorMessageId: outboundConversation.predecessorMessageId,
+      firstSubmittedAt: now,
+      body: input.body,
+    }, input.context, now);
+  }
+
+  /**
+   * Remote submission. A transport failure leaves the attempt unknown and the
+   * exact envelope intact: the origin never infers failure and never mints a
+   * replacement message or position. A peer's confirmed protocol rejection is
+   * a different thing and is recorded as rejected.
+   */
+  private async submitRemote(
+    envelope: InterTeamRequestEnvelope,
+    now: number,
+  ): Promise<OriginSendResult> {
+    const result = await this.transport.submit({
+      destinationNodeId: envelope.destinationNodeId,
+      envelope,
+    });
+    if (result.ok) {
+      await this.outbound.recordAttemptOutcome({
+        originNodeId: envelope.originNodeId,
+        messageId: envelope.messageId,
+        attemptState: 'accepted',
+        observedState: result.state,
+        now,
+      });
+      return {
+        ok: true,
+        conversationId: envelope.conversationId,
+        messageId: envelope.messageId,
+        protocolVersion: envelope.protocolVersion,
+        firstSubmittedAt: envelope.firstSubmittedAt,
+        outcome: {
+          kind: result.deduplicated ? 'deduplicated' : 'accepted',
+          status: result.state,
+          retention: 'retained',
+          messageId: result.messageId,
+        } as Extract<AcceptanceOutcome, { kind: 'accepted' | 'deduplicated' }>,
+      };
+    }
+    await this.outbound.recordAttemptOutcome({
+      originNodeId: envelope.originNodeId,
+      messageId: envelope.messageId,
+      attemptState: result.outcomeUnknown ? 'unknown' : 'rejected',
+      diagnostic: result.diagnostic,
+      now,
+    });
+    return { ok: false, code: result.code };
   }
 
   private async senderAtSend(context: TrustedLocalSourceContext): Promise<SenderAttribution | null> {
@@ -355,9 +458,6 @@ export class InterTeamOriginClient {
     });
     if (!resolved.ok) return resolved;
     const localNodeId = await this.acceptance.localNodeId();
-    if (resolved.contact.remoteNodeId !== localNodeId) {
-      return { ok: false, code: 'peer_route_unconfigured' };
-    }
     return this.resubmit({
       context: input.context,
       now: input.now,
@@ -386,21 +486,51 @@ export class InterTeamOriginClient {
     context: TrustedLocalSourceContext;
     conversationId: string;
     messageId: string;
-  }): Promise<CollectStoredResult> {
+  }): Promise<OriginCollectResult> {
     const localNodeId = await this.acceptance.localNodeId();
     const binding = await this.ownedConversation(
       localNodeId,
       input.context.localTeamId,
       input.conversationId,
     );
-    if (!binding) return { ok: false, code: 'conversation_not_found' };
-    return this.store.collect({
+    if (binding) {
+      return this.store.collect({
+        originNodeId: localNodeId,
+        originTeamId: input.context.localTeamId,
+        destinationTeamId: binding.destination_team_id,
+        conversationId: input.conversationId,
+        messageId: input.messageId,
+      });
+    }
+
+    // No local destination row means the conversation is remote, so the
+    // origin's own outbound record supplies the pins and the destination is
+    // asked over its route. An outbound record owned by another local team is
+    // indistinguishable from a missing one.
+    const outboundConversation = await this.outbound.getConversation(localNodeId, input.conversationId);
+    if (!outboundConversation || outboundConversation.originTeamId !== input.context.localTeamId) {
+      return { ok: false, code: 'conversation_not_found' };
+    }
+    const remote = await this.transport.collect({
+      destinationNodeId: outboundConversation.destinationNodeId,
       originNodeId: localNodeId,
       originTeamId: input.context.localTeamId,
-      destinationTeamId: binding.destination_team_id,
+      destinationTeamId: outboundConversation.destinationTeamId,
       conversationId: input.conversationId,
       messageId: input.messageId,
     });
+    if (remote.ok) {
+      // A read refreshes the last observed state only after the responder
+      // identity check inside the transport has succeeded.
+      await this.outbound.recordAttemptOutcome({
+        originNodeId: localNodeId,
+        messageId: input.messageId,
+        attemptState: 'accepted',
+        observedState: remote.value.state,
+      });
+      return { ok: true, value: remote.value };
+    }
+    return { ok: false, code: remote.code };
   }
 
   /**
@@ -548,12 +678,27 @@ export class InterTeamOriginClient {
     const resolved = await this.resolveContact(input.context, { alias: input.alias });
     if (!resolved.ok) return resolved;
     const localNodeId = await this.acceptance.localNodeId();
-    if (resolved.contact.remoteNodeId !== localNodeId) {
-      return { ok: false, code: 'peer_route_unconfigured' };
-    }
 
     const rate = this.consumeRosterRead(localNodeId, input.now ?? Date.now());
     if (!rate.ok) return rate;
+
+    if (resolved.contact.remoteNodeId !== localNodeId) {
+      // Descriptors are addressed by immutable team ID: the alias is
+      // origin-local vocabulary and never crosses the wire. The origin
+      // decorates its own response with the current alias afterwards.
+      const remote = await this.transport.describeTeam({
+        destinationNodeId: resolved.contact.remoteNodeId,
+        originNodeId: localNodeId,
+        originTeamId: input.context.localTeamId,
+        destinationTeamId: resolved.contact.remoteTeamId,
+      });
+      if (!remote.ok) return { ok: false, code: remote.code };
+      const descriptor = remote.value as unknown as TeamDescriptor;
+      if (descriptor.teamId !== resolved.contact.remoteTeamId) {
+        return { ok: false, code: 'peer_response_invalid' };
+      }
+      return { ok: true, descriptor: { ...descriptor, alias: resolved.contact.aliasDisplay } };
+    }
 
     const team = await query<{ id: string; name: string; inbound_policy: 'open' | 'closed' }>(
       this.db,
