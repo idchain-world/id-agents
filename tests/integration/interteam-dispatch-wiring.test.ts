@@ -160,10 +160,21 @@ describe('production inter-team dispatch wiring', () => {
     );
     expect(talkCalls[0]!.from).toBe('inter-team');
     expect(link.local_query_id).toBe(RUNTIME_QUERY_ID);
-    const job = (await db.adapter.query(
-      `SELECT query_id, agent_id FROM queries WHERE query_id = ?`, [RUNTIME_QUERY_ID],
-    )).rows[0];
-    expect(job).toMatchObject({ query_id: RUNTIME_QUERY_ID, agent_id: handlerId });
+    // The placeholder job is gone. A real runtime writes its own query row, so
+    // renaming the placeholder into the runtime's ID would collide with the row
+    // the agent already owns and leave the link pointing at a job nobody
+    // completes. Repointing and dropping the placeholder leaves exactly one.
+    const placeholders = (await db.adapter.query(
+      `SELECT query_id FROM queries WHERE query_id LIKE 'interteam_%'`,
+    )).rows;
+    expect(placeholders).toHaveLength(0);
+
+    // The runtime owns its job row, exactly as a live agent would.
+    await db.adapter.query(
+      `INSERT INTO queries (team_id, query_id, agent_id, prompt, status, created, owner_kind, owner_id)
+       VALUES (?, ?, ?, ?, 'pending', ?, 'agent', ?)`,
+      [destTeam, RUNTIME_QUERY_ID, handlerId, talkCalls[0]!.message, Date.now(), handlerId],
+    );
 
     // Completing that runtime query completes the inter-team message.
     await db.adapter.query(

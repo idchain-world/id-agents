@@ -1932,19 +1932,32 @@ export class AgentManagerDb {
     }
     const runtimeQueryId = result.data?.query_id;
     if (!runtimeQueryId || runtimeQueryId === input.localQueryId) return;
-    // Point the durable link at the runtime's query so completion is observed.
-    await this.db.adapter.query(
-      this.db.adapter.dialect === 'sqlite'
-        ? `UPDATE queries SET query_id = ? WHERE team_id = ? AND query_id = ?`
-        : `UPDATE queries SET query_id = $1 WHERE team_id = $2 AND query_id = $3`,
-      [runtimeQueryId, input.localTeamId, input.localQueryId],
-    );
-    await this.db.adapter.query(
-      this.db.adapter.dialect === 'sqlite'
-        ? `UPDATE interteam_processing SET local_query_id = ? WHERE local_query_id = ?`
-        : `UPDATE interteam_processing SET local_query_id = $1 WHERE local_query_id = $2`,
-      [runtimeQueryId, input.localQueryId],
-    );
+    // The runtime mints its own query and writes that row itself, so renaming
+    // the placeholder into the runtime's ID collides with the row the agent
+    // already owns. Repoint the durable link instead and drop the placeholder,
+    // which leaves exactly one job row: the agent's own.
+    try {
+      const sql = (sqlite: string, postgres: string) =>
+        this.db.adapter.dialect === 'sqlite' ? sqlite : postgres;
+      await this.db.adapter.query(
+        sql(
+          `UPDATE interteam_processing SET local_query_id = ?, updated_at = ? WHERE local_query_id = ?`,
+          `UPDATE interteam_processing SET local_query_id = $1, updated_at = $2 WHERE local_query_id = $3`,
+        ),
+        [runtimeQueryId, Date.now(), input.localQueryId],
+      );
+      await this.db.adapter.query(
+        sql(
+          `DELETE FROM queries WHERE team_id = ? AND query_id = ?`,
+          `DELETE FROM queries WHERE team_id = $1 AND query_id = $2`,
+        ),
+        [input.localTeamId, input.localQueryId],
+      );
+    } catch (error) {
+      // Leave the link on the placeholder rather than half-repointed: the
+      // reconciler then reports the work unknown instead of silently losing it.
+      console.error('[Manager] inter-team job repoint failed:', error);
+    }
   }
 
   /** Parse the request's destination selection into contact + variant. */

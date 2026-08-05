@@ -874,3 +874,35 @@ answers with a different identity, so the harness now starts a third node for it
 **Still unproven, and not simulated:** the Tailscale leg of topology portability. It needs a
 second host. The address-independence invariant it exists to prove remains proven locally by
 moving between binds over the same rows, as recorded under commit 16.
+
+## Real end-to-end cross-node test, and the bug it found
+
+The commit-16 container gate proves the transport, not the product: its image stubs the processor
+with a no-op dispatch function and completes jobs through a control endpoint, so no agent had ever
+answered a cross-node question. `tests/docker/run-real-agent-gate.sh` closes that gap. Two
+containers run `dist/start-agent-manager.js`, the production entry, each with its own durable
+database and a real `claude-code-cli` agent started through the production `/agents rebuild`
+launcher. A team on node A asked node B's team for the capital of France; B's lead agent answered
+`Paris`; A collected that result twice, non-consuming. 23 of 23 assertions pass. Results, including
+the verbatim question and answer, are in `output/real-agent-gate.md`.
+
+**The bug this found, which the transport gate could not.** `deliverInterteamWork` renamed its
+placeholder `queries` row into the runtime's own query ID. A real runtime writes that row itself,
+so the rename collided with the primary key the agent already owned, threw, and left the durable
+link pointing at a placeholder nobody completes. The agent answered into its own row while the
+inter-team message stayed `processing` forever. Fixed by repointing `interteam_processing` at the
+runtime's query ID and dropping the placeholder, leaving exactly one job row, with failures logged
+rather than thrown so a half-repoint reports the work unknown instead of losing it.
+`tests/integration/interteam-dispatch-wiring.test.ts` now asserts the corrected contract: no
+placeholder survives, and the runtime owns its row.
+
+Two environment findings, neither worked around. The manager deliberately strips
+`CLAUDE_CODE_OAUTH_TOKEN` from spawned children, correctly, because on a host that variable is a
+parent session handing auth down and causes 401s; the container entrypoint converts the token at
+run time into the CLI's own persisted login state instead, which is how a real deployment
+authenticates an agent. And the containers run as a non-root user, because the CLI refuses
+`--dangerously-skip-permissions` under root and that is the flag the local agent runtime passes by
+default. The token is never echoed, never baked into an image layer, and never committed.
+
+Regression at this point: 1393 passing and 60 skipped across the full suite, the commit-16
+transport gate still 21 of 21, and no containers, networks, or volumes left behind.

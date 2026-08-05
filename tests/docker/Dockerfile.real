@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+# Real end-to-end cross-node node: the production manager entry plus a real
+# claude-code-cli agent. Unlike the transport gate image, this one runs
+# dist/start-agent-manager.js, so the dispatch path under test is the shipped
+# one and no test endpoint can stand in for an agent.
+FROM node:22-bookworm-slim
+
+# node-gyp fallbacks for any dependency without a linux/arm64 prebuild, plus
+# the tools the CLI expects to find on PATH.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ git ca-certificates procps \
+  && rm -rf /var/lib/apt/lists/*
+
+# The agent runtime itself.
+RUN npm install -g @anthropic-ai/claude-code --no-audit --no-fund
+
+WORKDIR /app
+
+# The image installs its own linux/arm64 native bindings. The host's
+# darwin-arm64 node_modules is never copied in.
+COPY package.json package-lock.json ./
+# --ignore-scripts skips this repo's own `prepare` build, which needs devDeps
+# we deliberately do not install. Native modules are then rebuilt explicitly so
+# better-sqlite3 still gets a linux/arm64 binding.
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+  && npm rebuild better-sqlite3 \
+  && npm cache clean --force
+
+# Compiled JavaScript is platform independent, so the host build is reused.
+COPY dist ./dist
+COPY configs ./configs
+COPY skills ./skills
+COPY tests/docker/real-entry.sh /usr/local/bin/real-entry.sh
+
+# The agent runs as a non-root user. The Claude CLI refuses
+# --dangerously-skip-permissions under root, which is the flag the local agent
+# runtime passes by default, so a root container cannot run an agent at all.
+# Claude Code needs BOTH the directory and the separate config file; creating
+# them in the image means a recreated container still starts instead of the CLI
+# refusing because its config vanished with the old writable layer.
+RUN mkdir -p /home/node/.claude /home/node/.id-agents /workspace \
+  && printf '{}' > /home/node/.claude.json \
+  && chown -R node:node /home/node /workspace /app
+
+USER node
+ENV HOME=/home/node
+
+ENV NODE_ENV=production \
+    AGENT_MANAGER_WORKDIR=/workspace \
+    ID_HARNESS=claude-code-cli
+
+CMD ["/usr/local/bin/real-entry.sh"]
