@@ -393,3 +393,30 @@ design list — valid, unknown, ambiguous, stopped, wrong-team, name-and-ID equi
 rename before/after with stable ID addressing, soft-delete for both variants,
 delete-recreate resolving only the new ID, lead routing, and the shared predicate.
 Typecheck and suite green. No schema change; live database untouched.
+
+## Commit 8 — acceptance service, policy-before-recipient
+
+`src/inter-team/acceptance-service.ts` is the one post-transport acceptance service for
+same-manager and future federation transports. Order enforced and tested: federation
+self-node claim rejected first (`self_node_claim`, same-manager context allowed and
+derives the local node); envelope origin must agree with transport context
+(`source_context_mismatch`) and a mis-addressed destination node fails
+`target_identity_missing`; protocol major; stateless body bound; destination team by
+immutable ID; continuation participants validated against the pinned binding before
+deduplication or any other conversation access; accepted-duplicate short-circuit before
+mutable policy/capacity re-evaluation (a closed-after-accept team and a zeroed bound
+still return the committed state for an identical retry, `idempotency_conflict` for a
+changed one); policy before recipient for new conversations — resolver AND lead-lookup
+spies prove `target_closed` happens with zero agent lookups for known and unknown names
+alike; capacity bounds (body size, per-origin, per-team, per-direct-recipient, total)
+return `receiver_busy` pre-accept without dropping accepted work; then the commit-5
+store transaction re-runs dedup/order atomically and commits before 202. Continuations
+never re-resolve contact/policy/name — a caller-supplied different target fails
+`conversation_not_found` and the binding stays pinned (proven post-rename with policy
+flipped closed). The per-direct-recipient bound for an `agent_name` destination runs
+immediately after resolution (still pre-accept) because the pinned ID cannot exist at
+step 6; recorded here as the one deviation from strict step ordering, forced by the
+data dependency.
+
+Tests: 11 in `tests/repos/interteam-acceptance-service.test.ts`. All repos suites
+109/109, typecheck green. No schema change; live database untouched.
