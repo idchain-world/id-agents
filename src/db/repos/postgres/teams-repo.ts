@@ -19,7 +19,7 @@ export class PgTeamsRepo implements TeamsRepository {
 
   async getTeam(teamId: string): Promise<TeamRow | null> {
     const r = await this.db.query<TeamRow>(
-      'SELECT id, name, created_at FROM teams WHERE id = $1',
+      'SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams WHERE id = $1',
       [teamId],
     );
     return r.rows[0] || null;
@@ -27,7 +27,7 @@ export class PgTeamsRepo implements TeamsRepository {
 
   async getTeamByName(name: string): Promise<TeamRow | null> {
     const r = await this.db.query<TeamRow>(
-      'SELECT id, name FROM teams WHERE name = $1',
+      'SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams WHERE name = $1',
       [name],
     );
     return r.rows[0] || null;
@@ -53,14 +53,14 @@ export class PgTeamsRepo implements TeamsRepository {
 
   async listTeams(): Promise<TeamRow[]> {
     const r = await this.db.query<TeamRow>(
-      'SELECT id, name, created_at FROM teams ORDER BY created_at DESC',
+      'SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams ORDER BY created_at DESC',
     );
     return r.rows;
   }
 
   async listTeamsWithConfig(): Promise<TeamRow[]> {
     const r = await this.db.query<TeamRow>(
-      'SELECT id, name, config, created_at FROM teams ORDER BY created_at DESC',
+      'SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams ORDER BY created_at DESC',
     );
     return r.rows;
   }

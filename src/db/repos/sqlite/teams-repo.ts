@@ -23,7 +23,7 @@ export class SqliteTeamsRepo implements TeamsRepository {
 
   async getTeam(teamId: string): Promise<TeamRow | null> {
     const { rows } = await this.db.query<TeamRow>(
-      `SELECT id, name, config, port_start, port_end, created_at FROM teams WHERE id = ?`,
+      `SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams WHERE id = ?`,
       [teamId],
     );
     if (!rows[0]) return null;
@@ -32,7 +32,7 @@ export class SqliteTeamsRepo implements TeamsRepository {
 
   async getTeamByName(name: string): Promise<TeamRow | null> {
     const { rows } = await this.db.query<TeamRow>(
-      `SELECT id, name, config, port_start, port_end, created_at FROM teams WHERE name = ?`,
+      `SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams WHERE name = ?`,
       [name],
     );
     if (!rows[0]) return null;
@@ -58,14 +58,14 @@ export class SqliteTeamsRepo implements TeamsRepository {
 
   async listTeams(): Promise<TeamRow[]> {
     const { rows } = await this.db.query<TeamRow>(
-      `SELECT id, name, config, port_start, port_end, created_at FROM teams ORDER BY created_at DESC`,
+      `SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams ORDER BY created_at DESC`,
     );
     return rows.map(r => ({ ...r, config: parseJsonObject(r.config) }));
   }
 
   async listTeamsWithConfig(): Promise<TeamRow[]> {
     const { rows } = await this.db.query<TeamRow>(
-      `SELECT id, name, config, port_start, port_end, created_at FROM teams ORDER BY created_at DESC`,
+      `SELECT id, name, config, port_start, port_end, created_at, inbound_policy, lead_agent_id FROM teams ORDER BY created_at DESC`,
     );
     return rows.map(r => ({ ...r, config: parseJsonObject(r.config) }));
   }

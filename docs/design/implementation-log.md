@@ -227,3 +227,47 @@ Seniordev independently challenged the WAL snapshot, live-holder count, rollback
 decision-provenance assumptions. After the online-backup/restore hardening and verification
 of Prem's explicit five-team ruling, seniordev returned `APPROVE APPLY` and agreed the final
 post-apply gate passed.
+
+## Commit 4 — intrinsic node identity, team policy/lead, and contacts
+
+Built:
+
+- A singleton `manager_identity` row generated with one random UUID on first migration and
+  preserved on every rerun, restart, and restore-in-place. No network attribute, peer row,
+  token, credential, or per-team identity participates.
+- Explicit `teams.inbound_policy` (`closed` by default) and nullable `lead_agent_id`.
+  Store and database checks accept an explicitly selected stopped agent but reject a
+  deleted or cross-team agent. Hard or soft deletion clears the pointer. This deliberately
+  strengthens the design's unusable-lead case: null and dangling-deleted both produce the
+  same routing error, but a restored soft-deleted agent does not silently regain leadership;
+  an operator must assign it again.
+- Team-owned contacts with one display/normalized alias pair and opaque remote node/team
+  pins. Alias normalization reuses `normalizeOrgKey`; rename rewrites both forms atomically,
+  reruns per-team uniqueness, and cannot mutate the remote pins. The remote pins are `text`
+  in both dialects and have no foreign keys or UUID-format requirement.
+- A dialect-neutral foundation store for later operator APIs. No contact, lead, grant, or
+  peer configuration is fabricated by migration, and nothing derives the team lead from
+  the normalized org tree.
+
+Gate proof:
+
+- Focused SQLite repository/migration gate: 3 files, 31 tests passed; TypeScript build and
+  `git diff --check` passed.
+- Disposable PostgreSQL 16 parity gate: 11 tests passed across SQLite and PostgreSQL,
+  including deliberately non-UUID opaque contact pins.
+- Full migration on a disposable copy of the pre-org live backup: SQLite integrity `ok`,
+  9 teams, 9 `closed`, 9 null leads, exactly 1 valid node UUID stable across a second full
+  migration, and 0 contacts.
+- Restore-in-place test copied and reopened a file-backed SQLite database, reran migration,
+  and retained the exact original node UUID.
+- Full Node 22 repository suite: 116 files passed, 5 skipped; 1,263 tests passed, 60 skipped.
+- Seniordev independently reviewed the candidate, found and verified fixes for PostgreSQL
+  opaque-pin parity, duplicate display state, and swallowed SQLite ALTER failures, then
+  returned `APPROVE` with no remaining defects.
+
+Could not do: no live application of commit 4 was authorized or attempted. The migration
+was exercised only in memory, in disposable PostgreSQL, and on a disposable SQLite copy.
+
+Plan defects found: none. The archived pre-amendment plan inferred an inbox handler from a
+unique org lead; the current design explicitly forbids that inference, so commit 4 leaves
+every existing and newly created team lead null until an operator assigns it.

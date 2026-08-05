@@ -48,6 +48,8 @@ export interface TeamRow {
   port_start: number;
   port_end: number;
   created_at: string;
+  inbound_policy: 'open' | 'closed';
+  lead_agent_id: string | null;
 }
 
 /** Inbox ownership — complements legacy `agent_id` during the transition. */
