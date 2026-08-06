@@ -2418,6 +2418,22 @@ export class AgentManagerDb {
       }
     });
 
+    // Refresh is the explicit act the index deliberately does not perform on
+    // its own: one conversation, one collection, on demand.
+    this.managementApp.post('/inter-team/conversations/:conversationId/refresh', async (req, res) => {
+      try {
+        const context = this.getInterteamCallerContext(req);
+        const result = await this.interteamOrigin.refreshConversation({
+          context,
+          conversationId: req.params.conversationId,
+        });
+        if (!result.ok) return this.sendInterteamMessagingError(res, result.code);
+        res.json(result);
+      } catch (error) {
+        this.sendInterteamMessagingError(res, (error as Error).message);
+      }
+    });
+
     this.managementApp.get('/inter-team/descriptor/:alias', async (req, res) => {
       try {
         const context = this.getInterteamCallerContext(req);

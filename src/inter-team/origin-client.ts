@@ -76,6 +76,18 @@ export interface ConversationListEntry {
     /** Origin-local display metadata. Never used as authority. */
     sender: SenderAttribution | null;
   } | null;
+  /**
+   * Where the authority for this status lives. A local conversation is read
+   * from the same database that owns it, so its status is current. A remote one
+   * is only as fresh as the last collection.
+   */
+  origin: 'local' | 'remote';
+  /**
+   * When the remote status was last confirmed by an identity-validated
+   * collection. Null for local conversations, which are never stale, and null
+   * for a remote conversation nothing has collected yet.
+   */
+  observedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -655,14 +667,104 @@ export class InterTeamOriginClient {
             nameAtSend: row.latest_sender_name_at_send,
           },
         },
+        origin: 'local' as const,
+        observedAt: null,
         createdAt: Number(row.created_at),
         updatedAt: Number(row.updated_at),
       })),
     };
+    value.conversations.push(...await this.remoteConversations(localNodeId, input));
+    value.conversations.sort((a, b) => b.updatedAt - a.updatedAt);
     if (Buffer.byteLength(JSON.stringify(value), 'utf8') > this.conversationListBounds.maxEncodedBytes) {
       return { ok: false, code: 'read_response_too_large' };
     }
     return { ok: true, value };
+  }
+
+  /**
+   * Remote conversations, which have no destination row in this database at
+   * all, so the index would simply not show them without this. Their status is
+   * whatever the last identity-validated collection observed, which is why each
+   * carries `observedAt` and is labelled remote rather than presented as
+   * current. This reads local rows only; it never dials a peer, because one
+   * unreachable node would otherwise stall the whole list.
+   */
+  private async remoteConversations(
+    localNodeId: string,
+    input: { context: TrustedLocalSourceContext; state?: ConversationListStateFilter },
+  ): Promise<ConversationListEntry[]> {
+    const conversations = await this.outbound.listConversations(localNodeId, input.context.localTeamId);
+    const entries: ConversationListEntry[] = [];
+    for (const conversation of conversations) {
+      if (conversation.destinationNodeId === localNodeId) continue;
+      const submissions = await this.outbound.listSubmissions(localNodeId, conversation.conversationId);
+      const latest = submissions[submissions.length - 1] ?? null;
+      const state = latest?.lastObservedState ?? null;
+      if (input.state === 'outstanding' && state && !['accepted', 'processing', 'unknown'].includes(state)) continue;
+      if (input.state === 'terminal' && !(state === 'completed' || state === 'failed')) continue;
+
+      const alias = await query<{ alias_display: string }>(
+        this.db,
+        `SELECT alias_display FROM team_contacts
+         WHERE local_team_id = ? AND remote_node_id = ? AND remote_team_id = ?
+         ORDER BY alias_normalized, id LIMIT 1`,
+        [input.context.localTeamId, conversation.destinationNodeId, conversation.destinationTeamId],
+      );
+      entries.push({
+        conversationId: conversation.conversationId,
+        destination: {
+          kind: conversation.destinationKind,
+          nodeId: conversation.destinationNodeId,
+          teamId: conversation.destinationTeamId,
+          alias: alias.rows[0]?.alias_display ?? null,
+          pinnedAgentId: conversation.destinationAgentId,
+          nameAtAcceptance: conversation.destinationNameAtAcceptance,
+        },
+        latestMessage: latest === null ? null : {
+          messageId: latest.messageId,
+          position: latest.position,
+          state: (state ?? 'accepted') as ConversationListEntry['latestMessage'] extends null ? never : 'accepted',
+          lastConfirmedState: (state === 'completed' || state === 'failed' ? state : 'accepted'),
+          retention: 'retained',
+          acceptedAt: latest.createdAt,
+          updatedAt: latest.updatedAt,
+          terminalAt: null,
+          sender: null,
+        } as ConversationListEntry['latestMessage'],
+        origin: 'remote',
+        observedAt: latest?.lastObservedState ? latest.lastAttemptAt : null,
+        createdAt: conversation.createdAt,
+        updatedAt: conversation.updatedAt,
+      });
+    }
+    return entries;
+  }
+
+  /**
+   * Refresh exactly one remote conversation by collecting its latest message.
+   * This is the explicit act the index deliberately does not perform on its own:
+   * one conversation, one collection, on demand.
+   */
+  async refreshConversation(input: {
+    context: TrustedLocalSourceContext;
+    conversationId: string;
+  }): Promise<{ ok: true; state: string; observedAt: number } | { ok: false; code: string }> {
+    const localNodeId = await this.acceptance.localNodeId();
+    const conversation = await this.outbound.getConversation(localNodeId, input.conversationId);
+    if (!conversation || conversation.originTeamId !== input.context.localTeamId) {
+      return { ok: false, code: 'conversation_not_found' };
+    }
+    const submissions = await this.outbound.listSubmissions(localNodeId, input.conversationId);
+    const latest = submissions[submissions.length - 1];
+    if (!latest) return { ok: false, code: 'conversation_not_found' };
+
+    const collected = await this.collect({
+      context: input.context,
+      conversationId: input.conversationId,
+      messageId: latest.messageId,
+    });
+    if (!collected.ok) return collected;
+    return { ok: true, state: collected.value.state, observedAt: Date.now() };
   }
 
   /**
