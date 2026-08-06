@@ -705,6 +705,7 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
 
   const [connectView, setConnectView] = useState<TuiConnectView | null>(null);
   const [connectCopied, setConnectCopied] = useState(false);
+  const [connectWindowStart, setConnectWindowStart] = useState(0);
 
   const openContacts = useCallback(() => {
     setCtSelectedIndex(0);
@@ -719,6 +720,8 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
   const openConnect = useCallback(() => {
     // Built on open rather than at startup: it resolves real package paths,
     // and a broken layout should surface here, not crash the launch.
+    setConnectWindowStart(0);
+    setConnectCopied(false);
     try {
       setConnectView(buildTuiConnectView({ managerUrl: manager }));
     } catch {
@@ -1822,6 +1825,14 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
 
       if (view === 'connect') {
         if (input === 'a' || key.escape || key.leftArrow) return setView('agents');
+        // Scrolling, because the prompt is longer than a short terminal.
+        const scrollConnect = (delta: number): void =>
+          setConnectWindowStart((v) => Math.max(0, v + delta));
+        if (input === 'k' || key.upArrow) return scrollConnect(-1);
+        if (input === 'j' || key.downArrow) return scrollConnect(1);
+        if (key.pageUp) return scrollConnect(-connectWindowSize);
+        if (key.pageDown) return scrollConnect(connectWindowSize);
+        if (isHomeKey(input)) return setConnectWindowStart(0);
         if (input === 't') return setView('tasks');
         if (input === 'c') return openCalendar();
         if (input === 'h') return openHeartbeats();
@@ -2356,7 +2367,12 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
         />
       ) : view === 'connect' ? (
         connectView ? (
-          <ConnectView view={connectView} windowSize={connectWindowSize} copied={connectCopied} />
+          <ConnectView
+            view={connectView}
+            windowSize={connectWindowSize}
+            windowStart={connectWindowStart}
+            copied={connectCopied}
+          />
         ) : (
           <Box flexDirection="column" borderStyle="round" paddingX={1}>
             <Text bold>Connect</Text>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 
 export type FooterView =
   | 'agents'
@@ -58,18 +58,60 @@ const HAS_BACK: Record<FooterView, boolean> = {
   connect: true,
 };
 
-function hintFor(view: FooterView): string {
+/**
+ * Hints, shortened as the terminal narrows. The Connect chip is not in this
+ * string: it renders separately as an inverse chip ahead of the hints, because
+ * attaching a coding agent is the first thing an operator does on a machine
+ * they have just reached, and it must never be the part that gets dropped.
+ *
+ * The footer wrapped at 80 columns once the three inter-team hints were added,
+ * which pushed `q quit` onto a second line and collided with the right-hand
+ * label. Rather than guess a terminal width, hints are shed in reverse order of
+ * usefulness so the line always fits.
+ */
+function hintFor(view: FooterView, cols: number): string {
   const back = HAS_BACK[view] ? ' · ← back' : '';
-  // Contacts as a visible menu option was an explicit ask, so the three
-  // inter-team keys are named here rather than living only in the help modal.
-  return `↑↓ nav${back} · / cmd · o contacts · x nodes · e connect · ? help · q quit`;
+  // On Connect, the copy key is the whole point of the screen, so it sits ahead
+  // of the navigation hints and is the last thing shed as the terminal narrows.
+  const parts = view === 'connect'
+    ? ['Enter copy', `↑↓ nav${back}`, '/ cmd', 'o contacts', 'x nodes', '? help', 'q quit']
+    : [`↑↓ nav${back}`, '/ cmd', 'o contacts', 'x nodes', '? help', 'q quit'];
+  // Budget: the chip, a gap, the right-hand label, and the box padding.
+  let budget = cols - CHIP.length - 1 - RIGHT_LABEL.length - 3;
+  const kept: string[] = [];
+  for (const part of parts) {
+    const cost = kept.length === 0 ? part.length : part.length + 3;
+    if (cost > budget) break;
+    budget -= cost;
+    kept.push(part);
+  }
+  return kept.join(' · ');
+}
+
+const CHIP = ' e CONNECT ';
+const RIGHT_LABEL = 'ID Agents Dashboard';
+
+/** The Connect affordance, drawn as an inverse chip so it reads as a button. */
+export function ConnectChip(): React.ReactElement {
+  return (
+    <Text inverse bold>
+      {CHIP}
+    </Text>
+  );
 }
 
 export function Footer({ view }: FooterProps): React.ReactElement {
+  const { stdout } = useStdout();
+  const cols = stdout?.columns ?? 80;
   return (
     <Box paddingX={1} justifyContent="space-between">
-      <Text dimColor>{hintFor(view)}</Text>
-      <Text dimColor>ID Agents Dashboard</Text>
+      <Box>
+        <ConnectChip />
+        <Text dimColor>{' ' + hintFor(view, cols)}</Text>
+      </Box>
+      {cols >= CHIP.length + RIGHT_LABEL.length + 8 ? (
+        <Text dimColor>{RIGHT_LABEL}</Text>
+      ) : null}
     </Box>
   );
 }
