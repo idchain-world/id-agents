@@ -14,6 +14,14 @@
       "types": "./dist/dashboard-core/index.d.ts",
       "default": "./dist/dashboard-core/index.js"
     },
+    "./lifecycle": {
+      "types": "./dist/lifecycle/index.d.ts",
+      "default": "./dist/lifecycle/index.js"
+    },
+    "./connect": {
+      "types": "./dist/connect/connect-prompt.d.ts",
+      "default": "./dist/connect/connect-prompt.js"
+    },
     "./manager-entry": "./dist/start-agent-manager.js",
     "./package.json": "./package.json"
   },
