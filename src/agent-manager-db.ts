@@ -101,6 +101,7 @@ import {
 import { InterTeamProcessor, type DispatchInput as InterTeamDispatchInput } from './inter-team/processor.js';
 import { InterteamMessageStore } from './inter-team/message-store.js';
 import { PeerRouteStore, PeerRouteError } from './inter-team/peer-routes.js';
+import { PeerRouteProbe } from './inter-team/peer-route-probe.js';
 import { createFederationApp } from './inter-team/federation-app.js';
 import { HttpFederationTransport } from './inter-team/federation-client.js';
 import {
@@ -2203,6 +2204,26 @@ export class AgentManagerDb {
           localNodeId,
         });
         res.json({ route });
+      } catch (error) {
+        this.sendInterteamConfigError(res, error);
+      }
+    });
+
+    // A read-only diagnostic. Probing is per route and on demand: listing
+    // routes must never probe them all, or one dead peer costs a timeout
+    // before the list renders.
+    this.managementApp.post('/inter-team/config/peer-routes/:nodeId/probe', async (req, res) => {
+      try {
+        const context = await this.getInterteamOperatorContext(req);
+        const localNodeId = await this.interteamAcceptance.localNodeId();
+        const probe = new PeerRouteProbe(this.db.adapter);
+        res.json({
+          probe: await probe.probe({
+            nodeId: req.params.nodeId,
+            localNodeId,
+            localTeamId: context.localTeamId,
+          }),
+        });
       } catch (error) {
         this.sendInterteamConfigError(res, error);
       }
