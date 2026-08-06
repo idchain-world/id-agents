@@ -253,7 +253,35 @@ describe('inter-team views are reachable in the running TUI', () => {
       const after = requested.filter((url) => url.includes('/inter-team/')).length;
       expect(after).toBe(before);
 
-      // And the help view documents all three, which is the menu.
+      // The slash commands reach the same views, so an operator who lives in
+      // the command bar never needs the quick keys. Each press is spaced so
+      // the submit handler closes over the fully typed buffer.
+      const bySlash: Array<[string, string]> = [
+        ['contacts', 'Contacts —'],
+        ['connections', 'Node connections ('],
+        ['connect', 'Connect'],
+      ];
+      for (const [command, title] of bySlash) {
+        stdin.press('a');
+        await waitFor(() => stdout.lastFrame().includes('Agents ('), `agents before /${command}`);
+        // Keys drained in one tick are all handled by the same render's
+        // closure, so each press waits out a re-render before the next: '/'
+        // must flip commandMode before the text arrives, and the text must be
+        // in the rendered buffer before Enter submits it.
+        stdin.press('/');
+        await new Promise((r) => setTimeout(r, 200));
+        stdin.press(command);
+        await waitFor(() => stdout.lastFrame().includes(`/${command}`), `buffer shows /${command}`);
+        await new Promise((r) => setTimeout(r, 200));
+        stdin.press('\r');
+        await waitFor(() => stdout.lastFrame().includes(title), `/${command} opened its view`);
+      }
+
+      // The footer names the three keys, which is the visible menu Prem asked
+      // for, and the help view documents them too.
+      expect(stdout.lastFrame()).toContain('o contacts');
+      expect(stdout.lastFrame()).toContain('x nodes');
+      expect(stdout.lastFrame()).toContain('e connect');
       stdin.press('?');
       await waitFor(() => stdout.lastFrame().includes('Contacts (inter-team)'), 'help lists contacts');
       expect(stdout.lastFrame()).toContain('Node connections');

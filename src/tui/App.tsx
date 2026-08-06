@@ -1358,6 +1358,21 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
             setCommandError(null);
             return;
           }
+          if (data.tuiAction === 'contacts') {
+            openContacts();
+            setCommandError(null);
+            return;
+          }
+          if (data.tuiAction === 'connections') {
+            openNodeConnections();
+            setCommandError(null);
+            return;
+          }
+          if (data.tuiAction === 'connect') {
+            openConnect();
+            setCommandError(null);
+            return;
+          }
           if (data.tuiAction === 'output') {
             openOutput(data.agent, resolvedTeam);
             setCommandError(null);
@@ -2569,11 +2584,12 @@ function clamp(n: number, lo: number, hi: number): number {
 }
 
 function isTuiAction(value: unknown): value is
-  | { tuiAction: 'help' | 'configs' }
+  | { tuiAction: 'help' | 'configs' | 'contacts' | 'connections' | 'connect' }
   | { tuiAction: 'output'; agent: string } {
   if (typeof value !== 'object' || value === null) return false;
   const action = (value as { tuiAction?: unknown }).tuiAction;
   if (action === 'help' || action === 'configs') return true;
+  if (action === 'contacts' || action === 'connections' || action === 'connect') return true;
   return action === 'output' && typeof (value as { agent?: unknown }).agent === 'string';
 }
 

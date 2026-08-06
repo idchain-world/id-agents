@@ -123,6 +123,26 @@ const outputPolicy: CommandPolicy = {
   resultRenderer: 'table',
 };
 
+// Navigation commands, same local category as help/configs/output: they open a
+// TUI view, never touch the manager, and cannot fail with a manager error.
+const contactsPolicy: CommandPolicy = {
+  name: 'contacts',
+  description: 'Open the inter-team contacts view (also: o)',
+  tier: 'safe',
+};
+
+const connectionsPolicy: CommandPolicy = {
+  name: 'connections',
+  description: 'Open the node connections view, peer routes with probe (also: x)',
+  tier: 'safe',
+};
+
+const connectPolicy: CommandPolicy = {
+  name: 'connect',
+  description: 'Open Connect, the copy-paste prompt for a coding agent (also: e)',
+  tier: 'safe',
+};
+
 const teamPolicy: CommandPolicy = {
   name: 'team',
   description: 'Show/switch active team; delete empty team: `/team delete <name>`',
@@ -276,6 +296,9 @@ export const COMMAND_POLICIES: Record<string, CommandPolicy> = {
   team: teamPolicy,
   configs: configsPolicy,
   output: outputPolicy,
+  contacts: contactsPolicy,
+  connections: connectionsPolicy,
+  connect: connectPolicy,
   meta: remotePolicy('meta', 'Show agent metadata (`/meta <agent>`)', 'safe', {
     argCompleter: agentNameSlot0,
   }),

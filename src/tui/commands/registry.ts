@@ -198,6 +198,9 @@ const RUNNERS: Record<string, Runner> = {
   agents: agentsRunner,
   help: async () => ({ tuiAction: 'help' }),
   configs: async () => ({ tuiAction: 'configs' }),
+  contacts: async () => ({ tuiAction: 'contacts' }),
+  connections: async () => ({ tuiAction: 'connections' }),
+  connect: async () => ({ tuiAction: 'connect' }),
   output: async ({ args }) =>
     args[0] ? { tuiAction: 'output', agent: args[0] } : { ok: false, error: 'Usage: /output <agent>' },
   team: teamRunner,

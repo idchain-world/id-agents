@@ -60,7 +60,9 @@ const HAS_BACK: Record<FooterView, boolean> = {
 
 function hintFor(view: FooterView): string {
   const back = HAS_BACK[view] ? ' · ← back' : '';
-  return `↑↓ nav${back} · / cmd · ? help · q quit`;
+  // Contacts as a visible menu option was an explicit ask, so the three
+  // inter-team keys are named here rather than living only in the help modal.
+  return `↑↓ nav${back} · / cmd · o contacts · x nodes · e connect · ? help · q quit`;
 }
 
 export function Footer({ view }: FooterProps): React.ReactElement {
