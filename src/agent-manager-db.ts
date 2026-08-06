@@ -105,6 +105,7 @@ import { PeerRouteProbe } from './inter-team/peer-route-probe.js';
 import { createFederationApp } from './inter-team/federation-app.js';
 import { HttpFederationTransport } from './inter-team/federation-client.js';
 import {
+  assertManagementBindIsLoopback,
   describeFederationBind,
   resolveFederationListenerConfig,
   type FederationListenerConfig,
@@ -8268,6 +8269,11 @@ export class AgentManagerDb {
       }, 30_000);
       this.interteamTimer.unref?.();
 
+      // The management API is loopback and stays loopback. This guards the
+      // invariant rather than configuring it: there is no override, because an
+      // unauthenticated management API on a public interface is not a degraded
+      // setup, it is total compromise.
+      assertManagementBindIsLoopback('127.0.0.1');
       this.httpServer.listen(port, '127.0.0.1', async () => {
         console.log(`\n🚀 ID Agent Manager (DB-backed)`);
         console.log(`===============================`);

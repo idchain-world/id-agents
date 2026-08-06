@@ -13,6 +13,8 @@
 
 export const FEDERATION_WILDCARD_ADDRESSES = new Set(['0.0.0.0', '::', '[::]', '*']);
 
+import { inspectPublicAddresses } from './public-address.js';
+
 export type FederationListenerConfig =
   | { enabled: false }
   | { enabled: true; address: string; port: number; wildcardAcknowledged: boolean };
@@ -28,6 +30,21 @@ export interface FederationEnvironment {
   ID_FEDERATION_BIND_ADDRESS?: string;
   ID_FEDERATION_BIND_PORT?: string;
   ID_FEDERATION_ALLOW_WILDCARD_BIND?: string;
+  /** Separate from the wildcard override, and required on a public machine. */
+  ID_FEDERATION_ALLOW_PUBLIC_EXPOSURE?: string;
+}
+
+/**
+ * The management API is loopback and stays loopback. Unlike the federation
+ * bind, this has no override at all: an unauthenticated management API
+ * reachable from the internet is not a degraded configuration, it is total
+ * compromise. This is a guard on an invariant rather than a setting, so it
+ * cannot be made violable by a later change that adds configurability.
+ */
+export function assertManagementBindIsLoopback(address: string): void {
+  if (address !== '127.0.0.1' && address !== '::1' && address !== 'localhost') {
+    throw new FederationConfigError('peer_route_invalid');
+  }
 }
 
 /**
@@ -38,6 +55,7 @@ export interface FederationEnvironment {
  */
 export function resolveFederationListenerConfig(
   env: FederationEnvironment = process.env as FederationEnvironment,
+  interfaces?: NodeJS.Dict<Array<{ address: string; internal: boolean }>>,
 ): FederationListenerConfig {
   const address = env.ID_FEDERATION_BIND_ADDRESS?.trim();
   const rawPort = env.ID_FEDERATION_BIND_PORT?.trim();
@@ -51,8 +69,22 @@ export function resolveFederationListenerConfig(
 
   const wildcardAcknowledged = env.ID_FEDERATION_ALLOW_WILDCARD_BIND === '1'
     || env.ID_FEDERATION_ALLOW_WILDCARD_BIND === 'true';
-  if (FEDERATION_WILDCARD_ADDRESSES.has(address) && !wildcardAcknowledged) {
+  const isWildcard = FEDERATION_WILDCARD_ADDRESSES.has(address);
+  if (isWildcard && !wildcardAcknowledged) {
     throw new FederationConfigError('peer_route_invalid');
+  }
+
+  // The container override is not enough once the machine can be reached from
+  // the internet, because the federation listener has no authentication. A
+  // second, separate acknowledgement is required, so nobody carries a Docker
+  // habit onto a public VPS by accident.
+  if (isWildcard) {
+    const exposure = inspectPublicAddresses(interfaces);
+    const publicExposureAcknowledged = env.ID_FEDERATION_ALLOW_PUBLIC_EXPOSURE === '1'
+      || env.ID_FEDERATION_ALLOW_PUBLIC_EXPOSURE === 'true';
+    if (exposure.hasPublicAddress && !publicExposureAcknowledged) {
+      throw new FederationConfigError('peer_route_invalid');
+    }
   }
 
   return { enabled: true, address, port, wildcardAcknowledged };
