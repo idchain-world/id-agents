@@ -28,7 +28,13 @@ export {
   type HealthMonitorOptions,
 } from './health-monitor.js';
 export { probeManagerHealth, isPortOccupied, type FetchLike } from './port-probe.js';
-export { looksLikeManagerProcess, type PortOccupant } from './process-inspection.js';
+export {
+  looksLikeManagerProcess,
+  inspectPortOccupant,
+  type PortOccupant,
+  type CommandRunner,
+} from './process-inspection.js';
+export { createBoundedCommandRunner } from './command-runner.js';
 export {
   DEFAULT_MANAGER_HOST,
   DEFAULT_MANAGER_PORT,

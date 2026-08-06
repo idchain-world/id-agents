@@ -56,6 +56,7 @@ describe('shared manager lifecycle', () => {
     const names = sourceFiles().map((file) => path.basename(file)).sort();
     expect(names).toEqual([
       'ManagerLifecycleService.ts',
+      'command-runner.ts',
       'health-monitor.ts',
       'index.ts',
       'manager-paths.ts',
