@@ -35,7 +35,9 @@ const DEFAULT_POLL_MS = 5000;
 
 abstract class FocusPolledController<Row> {
   rows: Row[] = [];
-  loading = false;
+  // Starts true so the first paint says loading rather than claiming an empty
+  // list; the first refresh, triggered by focus, settles it either way.
+  loading = true;
   /** A list failure, rendered in the header. Cleared by the next good read. */
   error: string | null = null;
   private focused = false;

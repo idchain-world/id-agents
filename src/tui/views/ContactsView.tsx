@@ -60,6 +60,10 @@ export function ContactsView(props: ContactsViewProps): React.ReactElement {
           <Row key={row.contact.id} row={row} selected={windowStart + i === selectedIndex} />
         ))
       )}
+      {Array.from(
+        { length: Math.max(0, windowSize - Math.max(visible.length, visible.length === 0 && !loading ? 1 : 0)) },
+        (_, i) => (<Text key={`pad-${i}`}> </Text>),
+      )}
     </Box>
   );
 }

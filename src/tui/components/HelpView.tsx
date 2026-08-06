@@ -22,6 +22,9 @@ const VIEW_BINDINGS: Array<[string, string]> = [
   ['l', 'Library / agents'],
   ['s', 'Library / skills'],
   ['m', 'Library / teams'],
+  ['o', 'Contacts (inter-team)'],
+  ['x', 'Node connections'],
+  ['e', 'Connect prompt'],
 ];
 
 const NAVIGATE_BINDINGS: Array<[string, string]> = [
@@ -34,6 +37,8 @@ const NAVIGATE_BINDINGS: Array<[string, string]> = [
   ['i', 'Install (library team detail)'],
   ['F', 'Toggle force (install prompt)'],
   ['f', 'Fire heartbeat (heartbeats view)'],
+  ['p', 'Probe route (node connections)'],
+  ['Enter', 'Copy prompt (connect view)'],
 ];
 
 const GLOBAL_BINDINGS: Array<[string, string]> = [

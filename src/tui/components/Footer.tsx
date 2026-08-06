@@ -20,7 +20,10 @@ export type FooterView =
   | 'configs-list'
   | 'config-detail'
   | 'output-list'
-  | 'output-detail';
+  | 'output-detail'
+  | 'contacts'
+  | 'node-connections'
+  | 'connect';
 
 interface FooterProps {
   view: FooterView;
@@ -50,6 +53,9 @@ const HAS_BACK: Record<FooterView, boolean> = {
   'config-detail': true,
   'output-list': true,
   'output-detail': true,
+  contacts: true,
+  'node-connections': true,
+  connect: true,
 };
 
 function hintFor(view: FooterView): string {

@@ -60,6 +60,10 @@ export function NodeConnectionsView(props: NodeConnectionsViewProps): React.Reac
           <Row key={row.route.nodeId} row={row} selected={windowStart + i === selectedIndex} />
         ))
       )}
+      {Array.from(
+        { length: Math.max(0, windowSize - Math.max(visible.length, visible.length === 0 && !loading ? 1 : 0)) },
+        (_, i) => (<Text key={`pad-${i}`}> </Text>),
+      )}
       <Text dimColor>press p to probe the selected route</Text>
     </Box>
   );

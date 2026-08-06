@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput, useStdout } from 'ink';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
 import { Footer } from './components/Footer.js';
 import { HelpView, HELP_VIEW_CHROME_ROWS } from './components/HelpView.js';
 import { TeamsPanel } from './components/TeamsPanel.js';
@@ -11,6 +11,12 @@ import { StatusStrip } from './components/StatusStrip.js';
 import { TasksTable } from './components/TasksTable.js';
 import { TaskDetail } from './components/TaskDetail.js';
 import { CalendarView } from './components/CalendarView.js';
+import { ContactsView as InterteamContactsView } from './views/ContactsView.js';
+import { NodeConnectionsView } from './views/NodeConnectionsView.js';
+import { ConnectView } from './views/ConnectView.js';
+import { ContactsController, NodeConnectionsController } from './views/interteam-controllers.js';
+import { InterteamAdminClient } from './api/interteam.js';
+import { buildTuiConnectView, type TuiConnectView } from './connect/view.js';
 import { HeartbeatsView, type HeartbeatRow } from './components/HeartbeatsView.js';
 import { HeartbeatDetail } from './components/HeartbeatDetail.js';
 import { AgentDetail } from './components/AgentDetail.js';
@@ -103,7 +109,10 @@ type View =
   | 'configs-list'
   | 'config-detail'
   | 'output-list'
-  | 'output-detail';
+  | 'output-detail'
+  | 'contacts'
+  | 'node-connections'
+  | 'connect';
 
 const AGENTS_POLL_MS = 2000;
 const TEAMS_POLL_MS = 15000;
@@ -125,6 +134,11 @@ const CALENDAR_CHROME_ROWS = 7;
 // Heartbeats: no TeamsPanel, no StatusStrip — bordered list box
 // (windowSize + 6) + footer (1) = 7. Matches Calendar.
 const HEARTBEATS_CHROME_ROWS = 7;
+// Contacts matches the Calendar chrome shape (bordered list box only). Node
+// connections carries one extra hint row ("press p to probe").
+const CONTACTS_CHROME_ROWS = 7;
+const NODECONN_CHROME_ROWS = 8;
+const CONNECT_CHROME_ROWS = 4;
 // Library tables include a one-line subtitle (the libraryRoot path) on top
 // of the standard list-box chrome, so they need 1 extra row vs Heartbeats.
 const LIBRARY_CHROME_ROWS = 8;
@@ -205,6 +219,10 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
   const manager = useMemo(getManagerUrl, []);
   const { exit } = useApp();
   const { stdout } = useStdout();
+  // Gate input on the stdin ink is actually reading, not the process global:
+  // identical in production (they are the same stream), but an injected test
+  // stdin can accept keys, which is what makes navigation provable.
+  const { isRawModeSupported } = useStdin();
 
   const [staticTeams, setStaticTeams] = useState<Team[] | null>(null);
   const [staticAllAgents, setStaticAllAgents] = useState<Agent[] | null>(null);
@@ -459,6 +477,9 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
   const tasksWindowSize = Math.max(MIN_VISIBLE, rows - TASKS_CHROME_ROWS);
   const calendarWindowSize = Math.max(MIN_VISIBLE, rows - CALENDAR_CHROME_ROWS);
   const heartbeatsWindowSize = Math.max(MIN_VISIBLE, rows - HEARTBEATS_CHROME_ROWS);
+  const contactsWindowSize = Math.max(MIN_VISIBLE, rows - CONTACTS_CHROME_ROWS);
+  const nodeConnWindowSize = Math.max(MIN_VISIBLE, rows - NODECONN_CHROME_ROWS);
+  const connectWindowSize = Math.max(MIN_VISIBLE, rows - CONNECT_CHROME_ROWS);
   const libraryWindowSize = Math.max(MIN_VISIBLE, rows - LIBRARY_CHROME_ROWS);
   const configsWindowSize = libraryWindowSize;
   const outputWindowSize = libraryWindowSize;
@@ -637,6 +658,101 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
     },
     [total],
   );
+
+  // ── Inter-team: contacts, node connections, connect ──────────────────────
+  // The controllers own polling and probe state and are focus-gated: they poll
+  // only while their view is showing. Constructed per team because the manager
+  // derives operator context from the explicit team header.
+  const [, bumpInterteam] = useReducer((x: number) => x + 1, 0);
+  const contactsTeam = selectedTeam ?? teams[0]?.name ?? null;
+  const contactsController = useMemo(
+    () =>
+      contactsTeam === null || staticMode
+        ? null
+        : new ContactsController({
+            client: new InterteamAdminClient({ managerUrl: manager, team: contactsTeam }),
+            onChange: bumpInterteam,
+          }),
+    [manager, contactsTeam],
+  );
+  useEffect(() => () => contactsController?.dispose(), [contactsController]);
+  useEffect(() => {
+    contactsController?.setFocused(view === 'contacts' && !backgroundPaused);
+  }, [contactsController, view, backgroundPaused]);
+
+  // Routes are node-global; any team supplies the operator-context header.
+  const nodeConnController = useMemo(
+    () =>
+      contactsTeam === null || staticMode
+        ? null
+        : new NodeConnectionsController({
+            client: new InterteamAdminClient({ managerUrl: manager, team: contactsTeam }),
+            onChange: bumpInterteam,
+          }),
+    [manager, contactsTeam],
+  );
+  useEffect(() => () => nodeConnController?.dispose(), [nodeConnController]);
+  useEffect(() => {
+    nodeConnController?.setFocused(view === 'node-connections' && !backgroundPaused);
+  }, [nodeConnController, view, backgroundPaused]);
+
+  const [ctSelectedIndex, setCtSelectedIndex] = useState(0);
+  const [ctWindowStart, setCtWindowStart] = useState(0);
+  const [ncSelectedIndex, setNcSelectedIndex] = useState(0);
+  const [ncWindowStart, setNcWindowStart] = useState(0);
+  const ctTotal = contactsController?.rows.length ?? 0;
+  const ncTotal = nodeConnController?.rows.length ?? 0;
+
+  const [connectView, setConnectView] = useState<TuiConnectView | null>(null);
+  const [connectCopied, setConnectCopied] = useState(false);
+
+  const openContacts = useCallback(() => {
+    setCtSelectedIndex(0);
+    setCtWindowStart(0);
+    setView('contacts');
+  }, []);
+  const openNodeConnections = useCallback(() => {
+    setNcSelectedIndex(0);
+    setNcWindowStart(0);
+    setView('node-connections');
+  }, []);
+  const openConnect = useCallback(() => {
+    // Built on open rather than at startup: it resolves real package paths,
+    // and a broken layout should surface here, not crash the launch.
+    try {
+      setConnectView(buildTuiConnectView({ managerUrl: manager }));
+    } catch {
+      setConnectView(null);
+    }
+    setConnectCopied(false);
+    setView('connect');
+  }, [manager]);
+
+  const moveCtSel = useCallback(
+    (delta: number) => {
+      if (ctTotal === 0) return;
+      setCtSelectedIndex((idx) => clamp(idx + delta, 0, ctTotal - 1));
+    },
+    [ctTotal],
+  );
+  const moveNcSel = useCallback(
+    (delta: number) => {
+      if (ncTotal === 0) return;
+      setNcSelectedIndex((idx) => clamp(idx + delta, 0, ncTotal - 1));
+    },
+    [ncTotal],
+  );
+
+  useEffect(() => {
+    const next = clampScroll(ctSelectedIndex, ctWindowStart, ctTotal, contactsWindowSize);
+    if (next.index !== ctSelectedIndex) setCtSelectedIndex(next.index);
+    if (next.windowStart !== ctWindowStart) setCtWindowStart(next.windowStart);
+  }, [ctTotal, ctSelectedIndex, ctWindowStart, contactsWindowSize]);
+  useEffect(() => {
+    const next = clampScroll(ncSelectedIndex, ncWindowStart, ncTotal, nodeConnWindowSize);
+    if (next.index !== ncSelectedIndex) setNcSelectedIndex(next.index);
+    if (next.windowStart !== ncWindowStart) setNcWindowStart(next.windowStart);
+  }, [ncTotal, ncSelectedIndex, ncWindowStart, nodeConnWindowSize]);
 
   const moveNewsSel = useCallback(
     (delta: number) => {
@@ -1359,7 +1475,7 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
         if (
           input === 'a' || input === 't' || input === 'n' ||
           input === 'c' || input === 'h' || input === 'l' || input === 's' ||
-          input === 'm'
+          input === 'm' || input === 'o' || input === 'x' || input === 'e'
         ) {
           setShowHelp(false);
           setHelpScroll(0);
@@ -1371,6 +1487,9 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
           if (input === 'l') return openLibraryAgents();
           if (input === 's') return openLibrarySkills();
           if (input === 'm') return openLibraryTeams();
+          if (input === 'o') return openContacts();
+          if (input === 'x') return openNodeConnections();
+          if (input === 'e') return openConnect();
           return;
         }
         // ':' / '/' close help and open the command bar with that
@@ -1621,6 +1740,9 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
         if (input === 'l') return openLibraryAgents();
         if (input === 's') return openLibrarySkills();
         if (input === 'm') return openLibraryTeams();
+        if (input === 'o') return openContacts();
+        if (input === 'x') return openNodeConnections();
+        if (input === 'e') return openConnect();
         if (key.rightArrow) {
           // Remote agents get the detail panel; local agents get news
           const isRemote = selectedAgent?.deploymentShape === 'remote-endpoint' ||
@@ -1634,6 +1756,66 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
         if (key.pageDown) return moveAgentsSel(agentsWindowSize);
         if (isHomeKey(input)) return setSelectedIndex(0);
         if (isEndKey(input)) return setSelectedIndex(Math.max(0, total - 1));
+        return;
+      }
+
+      if (view === 'contacts') {
+        if (input === 'a' || key.escape || key.leftArrow) return setView('agents');
+        if (input === 't') return setView('tasks');
+        if (input === 'c') return openCalendar();
+        if (input === 'h') return openHeartbeats();
+        if (input === 'l') return openLibraryAgents();
+        if (input === 's') return openLibrarySkills();
+        if (input === 'm') return openLibraryTeams();
+        if (input === 'x') return openNodeConnections();
+        if (input === 'e') return openConnect();
+        if (key.tab) return cycleTeam(key.shift ? -1 : 1);
+        if (input === 'k' || key.upArrow) return moveCtSel(-1);
+        if (input === 'j' || key.downArrow) return moveCtSel(1);
+        if (key.pageUp) return moveCtSel(-contactsWindowSize);
+        if (key.pageDown) return moveCtSel(contactsWindowSize);
+        if (isHomeKey(input)) return setCtSelectedIndex(0);
+        if (isEndKey(input)) return setCtSelectedIndex(Math.max(0, ctTotal - 1));
+        return;
+      }
+
+      if (view === 'node-connections') {
+        if (input === 'a' || key.escape || key.leftArrow) return setView('agents');
+        if (input === 't') return setView('tasks');
+        if (input === 'c') return openCalendar();
+        if (input === 'h') return openHeartbeats();
+        if (input === 'l') return openLibraryAgents();
+        if (input === 's') return openLibrarySkills();
+        if (input === 'm') return openLibraryTeams();
+        if (input === 'o') return openContacts();
+        if (input === 'e') return openConnect();
+        if (input === 'p') {
+          // Explicit, per route. The outcome lands on the row as a state, so
+          // a dead peer reads as `unreachable`, never as an error dialog.
+          const row = nodeConnController?.rows[ncSelectedIndex];
+          if (row && nodeConnController) void nodeConnController.probe(row.route.nodeId);
+          return;
+        }
+        if (input === 'k' || key.upArrow) return moveNcSel(-1);
+        if (input === 'j' || key.downArrow) return moveNcSel(1);
+        if (key.pageUp) return moveNcSel(-nodeConnWindowSize);
+        if (key.pageDown) return moveNcSel(nodeConnWindowSize);
+        if (isHomeKey(input)) return setNcSelectedIndex(0);
+        if (isEndKey(input)) return setNcSelectedIndex(Math.max(0, ncTotal - 1));
+        return;
+      }
+
+      if (view === 'connect') {
+        if (input === 'a' || key.escape || key.leftArrow) return setView('agents');
+        if (input === 't') return setView('tasks');
+        if (input === 'c') return openCalendar();
+        if (input === 'h') return openHeartbeats();
+        if (input === 'o') return openContacts();
+        if (input === 'x') return openNodeConnections();
+        if (key.return) {
+          if (connectView) setConnectCopied(copyToClipboard(connectView.prompt, stdout));
+          return;
+        }
         return;
       }
 
@@ -1952,7 +2134,7 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
       if (isHomeKey(input)) return setDetailScroll(0);
       if (isEndKey(input)) return setDetailScroll(Number.MAX_SAFE_INTEGER);
     },
-    { isActive: process.stdin.isTTY === true },
+    { isActive: isRawModeSupported },
   );
 
   const debugViewEnabled = process.env.ID_TUI_DEBUG_VIEW === '1';
@@ -2138,6 +2320,34 @@ export function App({ staticMode = false }: AppProps = {}): React.ReactElement {
             error={tasksPoll.error}
           />
         </>
+      ) : view === 'contacts' ? (
+        <InterteamContactsView
+          rows={contactsController?.rows ?? []}
+          team={contactsTeam ?? '(no team)'}
+          selectedIndex={ctSelectedIndex}
+          windowStart={ctWindowStart}
+          windowSize={contactsWindowSize}
+          loading={contactsController?.loading ?? false}
+          error={contactsController?.error ?? null}
+        />
+      ) : view === 'node-connections' ? (
+        <NodeConnectionsView
+          rows={nodeConnController?.rows ?? []}
+          selectedIndex={ncSelectedIndex}
+          windowStart={ncWindowStart}
+          windowSize={nodeConnWindowSize}
+          loading={nodeConnController?.loading ?? false}
+          error={nodeConnController?.error ?? null}
+        />
+      ) : view === 'connect' ? (
+        connectView ? (
+          <ConnectView view={connectView} windowSize={connectWindowSize} copied={connectCopied} />
+        ) : (
+          <Box flexDirection="column" borderStyle="round" paddingX={1}>
+            <Text bold>Connect</Text>
+            <Text dimColor>could not resolve package paths for the connect prompt</Text>
+          </Box>
+        )
       ) : view === 'calendar' ? (
         <CalendarView
           schedules={calendarSchedules}
