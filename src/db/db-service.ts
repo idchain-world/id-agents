@@ -575,6 +575,15 @@ export interface EventsRepository {
   earliestSeq(teamId: string): Promise<number | null>;
 
   /**
+   * Highest seq currently retained for a team — used by `GET /events` to
+   * resync a consumer whose cursor is *ahead* of the log (e.g. the manager
+   * restarted and its event seq reset below a still-running consumer's cursor).
+   * Without this the endpoint echoes the stale cursor back and wedges that
+   * consumer forever. Returns null if no events exist.
+   */
+  latestSeq(teamId: string): Promise<number | null>;
+
+  /**
    * Delete rows for a team whose `occurred_at` is strictly less than the
    * cutoff. Used by the retention sweep to enforce the 7-day age cap.
    * Returns the number of rows deleted.

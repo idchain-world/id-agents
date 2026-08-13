@@ -4186,6 +4186,7 @@ export class AgentManagerDb {
           limit,
         });
         const earliestAvailableSeq = await this.db.events.earliestSeq(teamId);
+        const latestAvailableSeq = await this.db.events.latestSeq(teamId);
 
         const events = rows.map((row) => ({
           seq: row.seq,
@@ -4200,9 +4201,16 @@ export class AgentManagerDb {
           data: row.data,
         }));
 
+        // next_seq: advance to the last event we returned. With no events, hold
+        // at `since` (normal tailing) — UNLESS the cursor is *ahead* of the log's
+        // tail. That happens when the manager restarted and its event seq reset
+        // below a still-running consumer's cursor: echoing the stale cursor back
+        // would wedge that consumer forever (it polls since=N, we have nothing
+        // past N, it never advances). Detect it and resync the consumer to the
+        // current tail so the live feed recovers on the next poll.
         const nextSeq = events.length > 0
           ? events[events.length - 1].seq
-          : since;
+          : (latestAvailableSeq !== null && since > latestAvailableSeq ? latestAvailableSeq : since);
 
         // replay_truncated: the consumer's cursor predates retained
         // history. `since` is an exclusive cursor, so the consumer next
