@@ -38,6 +38,7 @@ export const CLAUDE_MODELS = {
   SONNET: 'claude-sonnet-4-20250514',      // Balanced: $3/$15 per 1M tokens
   OPUS: 'claude-opus-4-20250514',          // Most capable: $15/$75 per 1M tokens
   FABLE: 'claude-fable-5',                 // Fable 5: $10/$50 per 1M tokens
+  FABLE_5_1: 'claude-fable-5-1',           // Fable 5.1: $10/$50 per 1M tokens
   MYTHOS: 'claude-mythos-5'                // Mythos 5: $10/$50 per 1M tokens (Project Glasswing access required)
 } as const;
 
@@ -53,6 +54,7 @@ export function modelDisplayName(model: string): string {
          // dated snapshot; `claude-opus-4-5-…` does not contain `opus-5`.
          model.includes('opus-5') ? 'Opus 5' :
          model.includes('opus') ? 'Opus 4 (Premium)' :
+         model.includes('fable-5-1') || model.includes('fable-5.1') ? 'Fable 5.1' :
          model.includes('fable') ? 'Fable 5' :
          model.includes('mythos') ? 'Mythos 5' : model;
 }

@@ -14,6 +14,7 @@ export const CLAUDE_MODELS = {
   SONNET: 'claude-sonnet-4-20250514',
   OPUS: 'claude-opus-4-20250514',
   FABLE: 'claude-fable-5',
+  FABLE_5_1: 'claude-fable-5-1',
   MYTHOS: 'claude-mythos-5'
 } as const;
 

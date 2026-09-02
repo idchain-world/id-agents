@@ -19,6 +19,8 @@ export const MODEL_ALIASES: Record<string, string> = {
   'opus5': 'claude-opus-5',
   'fable': 'claude-fable-5',
   'fable-5': 'claude-fable-5',
+  'fable-5.1': 'claude-fable-5-1',
+  'fable-5-1': 'claude-fable-5-1',
   'mythos': 'claude-mythos-5',
   'mythos-5': 'claude-mythos-5',
   // Cursor CLI first-party models. Resolution is runtime-agnostic (the `/model`

@@ -19,6 +19,7 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'claude-sonnet-5': 'sonn-5',
   'claude-haiku-4-5-20251001': 'haiku-4-5',
   'claude-fable-5': 'fable-5',
+  'claude-fable-5-1': 'fable-5.1',
   'claude-mythos-5': 'myth-5',
   // Raw alias some agents store verbatim (e.g. `model: fable` in YAML)
   'fable': 'fable-5',
