@@ -248,7 +248,7 @@ function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | '
   if (!model) return 'unknown';
   const normalized = model.trim().toLowerCase();
 
-  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'mythos', 'mythos-5'].includes(normalized) || normalized.startsWith('claude')) {
+  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1', 'mythos', 'mythos-5'].includes(normalized) || normalized.startsWith('claude')) {
     return 'claude';
   }
 
