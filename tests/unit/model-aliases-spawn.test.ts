@@ -16,6 +16,8 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
     expect(resolveModelAlias('mythos')).toBe('claude-mythos-5');
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
+    expect(resolveModelAlias('astra-6')).toBe('gpt-6-astra');
+    expect(resolveModelAlias('grok-4.6')).toBe('cursor-grok-4.6-high');
   });
 
   it('is case-insensitive', () => {
@@ -31,6 +33,8 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
       'claude-opus-4-8',
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4-20250514',
+      'gpt-6-astra',
+      'cursor-grok-4.6-high',
     ]) {
       expect(resolveModelAlias(id)).toBe(id);
       // resolving twice must equal resolving once

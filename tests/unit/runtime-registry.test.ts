@@ -87,6 +87,24 @@ describe('runtime registry', () => {
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'mythos-5')).toEqual([]);
   });
 
+  it.each(['astra-6', 'ASTRA-6', 'gpt-6-astra'])('validates the Astra model %s as OpenAI', (model) => {
+    expect(validateRuntimeModelCompatibility('codex', model)).toEqual([]);
+    expect(validateRuntimeModelCompatibility('claude-code-cli', model)).toEqual([
+      { code: 'runtime_model_mismatch', message: `runtime "claude-code-cli" is incompatible with OpenAI model "${model}"` },
+    ]);
+  });
+
+  it.each(['grok-4.6', 'grok-4-6', 'cursor-grok-4.6-high', 'cursor-grok-4.6-xhigh-fast'])(
+    'requires cursor-cli for %s', (model) => {
+      expect(validateRuntimeModelCompatibility('cursor-cli', model)).toEqual([]);
+      for (const runtime of ['codex', 'claude-code-cli', 'claude-agent-sdk']) {
+        expect(validateRuntimeModelCompatibility(runtime, model)).toEqual([
+          { code: 'runtime_model_mismatch', message: `runtime "${runtime}" is incompatible with Cursor model "${model}"; use runtime "cursor-cli"` },
+        ]);
+      }
+    },
+  );
+
   it('treats fable/mythos short names as the Claude family', () => {
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'mythos')).toEqual([]);

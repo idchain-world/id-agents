@@ -10,6 +10,7 @@
 import type { HarnessType } from '../harness/types.js';
 import type { RuntimeProfile, RuntimeId, RuntimeValidationIssue } from './types.js';
 import { execFileSync, spawnSync } from 'child_process';
+import { resolveModelAlias } from '../core/model-aliases.js';
 
 const DEFAULT_RUNTIME: RuntimeId = 'claude-agent-sdk';
 const RUNTIME_ALIASES: Record<string, RuntimeId> = {
@@ -244,9 +245,11 @@ export function isRemoteEndpointRuntime(runtime: string | undefined): boolean {
   return PROFILES[runtime as RuntimeId].deploymentShape === 'remote-endpoint';
 }
 
-function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'unknown' {
+function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'cursor' | 'unknown' {
   if (!model) return 'unknown';
-  const normalized = model.trim().toLowerCase();
+  const normalized = resolveModelAlias(model.trim()).toLowerCase();
+
+  if (normalized.startsWith('cursor-grok-')) return 'cursor';
 
   if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1', 'mythos', 'mythos-5'].includes(normalized) || normalized.startsWith('claude')) {
     return 'claude';
@@ -277,6 +280,13 @@ export function validateRuntimeModelCompatibility(
   // Cursor Agent CLI supports both Claude-family (sonnet-4, sonnet-4-thinking)
   // and OpenAI-family (gpt-5, ...) models, so skip cross-family checks for it.
   if (resolvedRuntime === 'cursor-cli') return issues;
+
+  if (family === 'cursor') {
+    issues.push({
+      code: 'runtime_model_mismatch',
+      message: `runtime "${resolvedRuntime}" is incompatible with Cursor model "${model}"; use runtime "cursor-cli"`,
+    });
+  }
 
   if (resolvedRuntime === 'codex' && family === 'claude') {
     issues.push({

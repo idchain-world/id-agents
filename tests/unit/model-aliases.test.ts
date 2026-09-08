@@ -9,6 +9,28 @@ import { abbrevModel } from '../../src/tui/util/models.js';
 import { abbrevRuntime } from '../../src/tui/util/runtime.js';
 
 describe('model alias resolution', () => {
+  it.each([
+    ['astra-6', 'gpt-6-astra'],
+    ['ASTRA-6', 'gpt-6-astra'],
+    ['grok-4.6', 'cursor-grok-4.6-high'],
+    ['grok-4-6', 'cursor-grok-4.6-high'],
+    ['GROK-4.6', 'cursor-grok-4.6-high'],
+  ])('resolves %s to %s and remains idempotent', (alias, canonical) => {
+    expect(resolveModelAlias(alias)).toBe(canonical);
+    expect(resolveModelAlias(resolveModelAlias(alias))).toBe(canonical);
+  });
+
+  it.each([
+    'gpt-6-astra',
+    'cursor-grok-4.6-low',
+    'cursor-grok-4.6-medium',
+    'cursor-grok-4.6-high',
+    'cursor-grok-4.6-xhigh',
+    'cursor-grok-4.6-high-fast',
+  ])('preserves the explicit model choice %s', (model) => {
+    expect(resolveModelAlias(model)).toBe(model);
+  });
+
   it('resolves the new fable/mythos aliases to canonical model ids', () => {
     expect(resolveModelAlias('fable')).toBe('claude-fable-5');
     expect(resolveModelAlias('fable-5')).toBe('claude-fable-5');
@@ -95,6 +117,30 @@ describe('model display labels', () => {
 });
 
 describe('TUI model abbreviations', () => {
+  it.each([
+    ['gpt-6-astra', 'astra-6'],
+    ['astra-6', 'astra-6'],
+    ['grok-4.6', 'grok-4.6'],
+    ['grok-4-6', 'grok-4.6'],
+    ['cursor-grok-4.6-high', 'grok-4.6'],
+    ['cursor-grok-4.6-low', 'g4.6-lo'],
+    ['cursor-grok-4.6-medium', 'g4.6-med'],
+    ['cursor-grok-4.6-xhigh', 'g4.6-xhi'],
+    ['cursor-grok-4.6-low-fast', 'g4.6-lo-f'],
+    ['cursor-grok-4.6-medium-fast', 'g4.6-md-f'],
+    ['cursor-grok-4.6-high-fast', 'g4.6-hi-f'],
+    ['cursor-grok-4.6-xhigh-fast', 'g4.6-xh-f'],
+  ])('displays %s as %s without overflowing the MODEL column', (model, label) => {
+    expect(abbrevModel(model)).toBe(label);
+    expect(label.length).toBeLessThanOrEqual(9);
+  });
+
+  it('preserves missing and unknown model fallbacks', () => {
+    expect(abbrevModel(undefined)).toBe('—');
+    expect(abbrevModel('')).toBe('—');
+    expect(abbrevModel('future-model')).toBe('future-model');
+  });
+
   it('abbreviates fable and mythos model ids', () => {
     expect(abbrevModel('claude-fable-5')).toBe('fable-5');
     expect(abbrevModel('claude-mythos-5')).toBe('myth-5');

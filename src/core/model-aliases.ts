@@ -23,11 +23,16 @@ export const MODEL_ALIASES: Record<string, string> = {
   'fable-5-1': 'claude-fable-5-1',
   'mythos': 'claude-mythos-5',
   'mythos-5': 'claude-mythos-5',
+  // OpenAI Codex. Keep the requested short name distinct from the provider ID.
+  'astra-6': 'gpt-6-astra',
   // Cursor CLI first-party models. Resolution is runtime-agnostic (the `/model`
   // command resolves before storing), so non-Claude ids belong here too.
   'grok': 'grok-4.5',
   'grok-4.5': 'grok-4.5',
-  'grok-4-5': 'grok-4.5'
+  'grok-4-5': 'grok-4.5',
+  // Grok 4.6's default Cursor option uses high effort. Preserve older aliases.
+  'grok-4.6': 'cursor-grok-4.6-high',
+  'grok-4-6': 'cursor-grok-4.6-high',
 };
 
 export function resolveModelAlias(model: string): string {

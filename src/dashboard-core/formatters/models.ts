@@ -25,6 +25,8 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'fable': 'fable-5',
 
   // OpenAI Codex
+  'gpt-6-astra': 'astra-6',
+  'astra-6': 'astra-6',
   'gpt-5.4': 'gpt-5.4',
   'gpt-5.5': 'gpt-5.5',
   // 5.6 named variants — compress to a 'g5.6-' prefix + 3-letter suffix so the
@@ -36,6 +38,17 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   // Cursor / Composer
   'composer-2': 'comp-2',
   'grok-4.5': 'grok-4.5',
+  'grok-4.6': 'grok-4.6',
+  'grok-4-6': 'grok-4.6',
+  'cursor-grok-4.6-high': 'grok-4.6',
+  // Keep effort and Fast variants distinguishable within the 9-character column.
+  'cursor-grok-4.6-low': 'g4.6-lo',
+  'cursor-grok-4.6-medium': 'g4.6-med',
+  'cursor-grok-4.6-xhigh': 'g4.6-xhi',
+  'cursor-grok-4.6-low-fast': 'g4.6-lo-f',
+  'cursor-grok-4.6-medium-fast': 'g4.6-md-f',
+  'cursor-grok-4.6-high-fast': 'g4.6-hi-f',
+  'cursor-grok-4.6-xhigh-fast': 'g4.6-xh-f',
 };
 
 /**
