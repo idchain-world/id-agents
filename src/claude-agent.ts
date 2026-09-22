@@ -39,7 +39,7 @@ export const CLAUDE_MODELS = {
   OPUS: 'claude-opus-4-20250514',          // Most capable: $15/$75 per 1M tokens
   FABLE: 'claude-fable-5',                 // Fable 5: $10/$50 per 1M tokens
   FABLE_5_1: 'claude-fable-5-1',           // Fable 5.1: $10/$50 per 1M tokens
-  MYTHOS: 'claude-mythos-5'                // Mythos 5: $10/$50 per 1M tokens (Project Glasswing access required)
+  OPUS_5_5: 'claude-opus-5-5'              // Opus 5.5
 } as const;
 
 /**
@@ -52,11 +52,12 @@ export function modelDisplayName(model: string): string {
          // Must precede the generic `opus` arm, which would otherwise label
          // Opus 5 as "Opus 4 (Premium)". Matches `claude-opus-5` and any future
          // dated snapshot; `claude-opus-4-5-…` does not contain `opus-5`.
+         // Checked before `opus-5`: `claude-opus-5-5` contains that substring.
+         model.includes('opus-5-5') || model.includes('opus-5.5') ? 'Opus 5.5' :
          model.includes('opus-5') ? 'Opus 5' :
          model.includes('opus') ? 'Opus 4 (Premium)' :
          model.includes('fable-5-1') || model.includes('fable-5.1') ? 'Fable 5.1' :
-         model.includes('fable') ? 'Fable 5' :
-         model.includes('mythos') ? 'Mythos 5' : model;
+         model.includes('fable') ? 'Fable 5' : model;
 }
 
 /**

@@ -10,6 +10,7 @@
 import type { HarnessType } from '../harness/types.js';
 import type { RuntimeProfile, RuntimeId, RuntimeValidationIssue } from './types.js';
 import { execFileSync, spawnSync } from 'child_process';
+import { resolveModelAlias } from '../core/model-aliases.js';
 
 const DEFAULT_RUNTIME: RuntimeId = 'claude-agent-sdk';
 const RUNTIME_ALIASES: Record<string, RuntimeId> = {
@@ -22,6 +23,9 @@ const PROFILES: Record<RuntimeId, RuntimeProfile> = {
     canonicalId: 'claude-agent-sdk',
     displayName: 'Claude',
     providerName: 'Claude Agent SDK',
+    // Deliberately the cheapest model, and NOT the bare `opus` alias the CLI runtimes
+    // use: this runtime bills per token against ANTHROPIC_API_KEY, not the Claude
+    // subscription. An agent landing here by accident must not burn API credits.
     defaultModel: 'claude-haiku-4-5-20251001',
     sessionPolicy: 'persistent',
     deploymentShape: 'local-process',
@@ -41,7 +45,7 @@ const PROFILES: Record<RuntimeId, RuntimeProfile> = {
     canonicalId: 'claude-code-cli',
     displayName: 'Claude Code',
     providerName: 'Claude Code CLI',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultModel: 'opus', // bare alias: resolves to the latest Opus at spawn
     sessionPolicy: 'persistent',
     deploymentShape: 'local-process',
     auth: {
@@ -59,7 +63,7 @@ const PROFILES: Record<RuntimeId, RuntimeProfile> = {
     canonicalId: 'claude-code-cli',
     displayName: 'Claude Code',
     providerName: 'Claude Code CLI',
-    defaultModel: 'claude-opus-4-20250514',
+    defaultModel: 'opus', // bare alias: resolves to the latest Opus at spawn
     sessionPolicy: 'persistent',
     deploymentShape: 'local-process',
     auth: {
@@ -244,11 +248,14 @@ export function isRemoteEndpointRuntime(runtime: string | undefined): boolean {
   return PROFILES[runtime as RuntimeId].deploymentShape === 'remote-endpoint';
 }
 
-function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'unknown' {
+function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'cursor' | 'unknown' {
   if (!model) return 'unknown';
-  const normalized = model.trim().toLowerCase();
+  const normalized = resolveModelAlias(model.trim()).toLowerCase();
 
-  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1', 'mythos', 'mythos-5'].includes(normalized) || normalized.startsWith('claude')) {
+  // Grok 4.6 ids carry a `cursor-` prefix; 4.5 and 4.7 do not. Both are Cursor-served.
+  if (normalized.startsWith('cursor-grok-') || normalized.startsWith('grok-')) return 'cursor';
+
+  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1'].includes(normalized) || normalized.startsWith('claude')) {
     return 'claude';
   }
 
@@ -277,6 +284,13 @@ export function validateRuntimeModelCompatibility(
   // Cursor Agent CLI supports both Claude-family (sonnet-4, sonnet-4-thinking)
   // and OpenAI-family (gpt-5, ...) models, so skip cross-family checks for it.
   if (resolvedRuntime === 'cursor-cli') return issues;
+
+  if (family === 'cursor') {
+    issues.push({
+      code: 'runtime_model_mismatch',
+      message: `runtime "${resolvedRuntime}" is incompatible with Cursor model "${model}"; use runtime "cursor-cli"`,
+    });
+  }
 
   if (resolvedRuntime === 'codex' && family === 'claude') {
     issues.push({

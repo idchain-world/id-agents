@@ -17,7 +17,7 @@ team: starter-pair
 defaults:
   local: true
   runtime: claude-code-cli
-  model: claude-opus-4-7
+  model: opus  # bare alias: tracks the latest Opus
   skills:
     - identity
     - inter-agent
@@ -26,7 +26,7 @@ defaults:
 agents:
   - name: lead
     description: "Plans the work, splits it into tasks, reviews the result."
-    model: claude-opus-4-7
+    model: opus
 
   - name: dev
     description: "Implements features against the lead's plan."

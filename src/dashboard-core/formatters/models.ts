@@ -14,17 +14,19 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'claude-opus-4-7': 'opus-4-7',
   'claude-opus-4-8': 'opus-4.8',
   'claude-opus-5': 'opus-5',
+  'claude-opus-5-5': 'opus-5.5',
   'claude-sonnet-4-5-20250514': 'sonn-4-5',
   'claude-sonnet-4-6': 'sonn-4-6',
   'claude-sonnet-5': 'sonn-5',
   'claude-haiku-4-5-20251001': 'haiku-4-5',
   'claude-fable-5': 'fable-5',
   'claude-fable-5-1': 'fable-5.1',
-  'claude-mythos-5': 'myth-5',
   // Raw alias some agents store verbatim (e.g. `model: fable` in YAML)
-  'fable': 'fable-5',
+  'fable': 'fable-5.1',
 
   // OpenAI Codex
+  'gpt-6-astra': 'astra-6',
+  'astra-6': 'astra-6',
   'gpt-5.4': 'gpt-5.4',
   'gpt-5.5': 'gpt-5.5',
   // 5.6 named variants — compress to a 'g5.6-' prefix + 3-letter suffix so the
@@ -36,6 +38,28 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   // Cursor / Composer
   'composer-2': 'comp-2',
   'grok-4.5': 'grok-4.5',
+  'grok-4.6': 'grok-4.6',
+  'grok-4-6': 'grok-4.6',
+  'cursor-grok-4.6-high': 'grok-4.6',
+  // Keep effort and Fast variants distinguishable within the 9-character column.
+  'cursor-grok-4.6-low': 'g4.6-lo',
+  'cursor-grok-4.6-medium': 'g4.6-med',
+  'cursor-grok-4.6-xhigh': 'g4.6-xhi',
+  'cursor-grok-4.6-low-fast': 'g4.6-lo-f',
+  'cursor-grok-4.6-medium-fast': 'g4.6-md-f',
+  'cursor-grok-4.6-high-fast': 'g4.6-hi-f',
+  'cursor-grok-4.6-xhigh-fast': 'g4.6-xh-f',
+  // Grok 4.7: no `cursor-` prefix; same effort/Fast layout as 4.6.
+  'grok-4.7': 'grok-4.7',
+  'grok-4-7': 'grok-4.7',
+  'grok-4.7-high': 'grok-4.7',
+  'grok-4.7-low': 'g4.7-lo',
+  'grok-4.7-medium': 'g4.7-med',
+  'grok-4.7-xhigh': 'g4.7-xhi',
+  'grok-4.7-low-fast': 'g4.7-lo-f',
+  'grok-4.7-medium-fast': 'g4.7-md-f',
+  'grok-4.7-high-fast': 'g4.7-hi-f',
+  'grok-4.7-xhigh-fast': 'g4.7-xh-f',
 };
 
 /**
