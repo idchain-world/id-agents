@@ -15,6 +15,9 @@ describe('model alias resolution', () => {
     ['grok-4.6', 'cursor-grok-4.6-high'],
     ['grok-4-6', 'cursor-grok-4.6-high'],
     ['GROK-4.6', 'cursor-grok-4.6-high'],
+    ['grok-4.7', 'grok-4.7-high'],
+    ['grok-4-7', 'grok-4.7-high'],
+    ['GROK-4.7', 'grok-4.7-high'],
   ])('resolves %s to %s and remains idempotent', (alias, canonical) => {
     expect(resolveModelAlias(alias)).toBe(canonical);
     expect(resolveModelAlias(resolveModelAlias(alias))).toBe(canonical);
@@ -31,11 +34,9 @@ describe('model alias resolution', () => {
     expect(resolveModelAlias(model)).toBe(model);
   });
 
-  it('resolves the new fable/mythos aliases to canonical model ids', () => {
-    expect(resolveModelAlias('fable')).toBe('claude-fable-5');
+  it('resolves the fable aliases to canonical model ids', () => {
+    expect(resolveModelAlias('fable')).toBe('claude-fable-5-1'); // bare alias = latest
     expect(resolveModelAlias('fable-5')).toBe('claude-fable-5');
-    expect(resolveModelAlias('mythos')).toBe('claude-mythos-5');
-    expect(resolveModelAlias('mythos-5')).toBe('claude-mythos-5');
   });
 
   it('resolves the opus-5 aliases to the canonical model id', () => {
@@ -46,35 +47,49 @@ describe('model alias resolution', () => {
     expect(resolveModelAlias('claude-opus-5')).toBe('claude-opus-5');
   });
 
-  it('resolves the grok aliases to the Cursor CLI model id', () => {
-    expect(resolveModelAlias('grok')).toBe('grok-4.5');
-    expect(resolveModelAlias('grok-4.5')).toBe('grok-4.5');
-    expect(resolveModelAlias('grok-4-5')).toBe('grok-4.5');
-    expect(resolveModelAlias('GROK')).toBe('grok-4.5');
+  it('resolves the opus-5.5 aliases to the canonical model id', () => {
+    expect(resolveModelAlias('opus-5.5')).toBe('claude-opus-5-5');
+    expect(resolveModelAlias('opus-5-5')).toBe('claude-opus-5-5');
+    expect(resolveModelAlias('opus5.5')).toBe('claude-opus-5-5');
+    expect(resolveModelAlias('OPUS-5.5')).toBe('claude-opus-5-5');
+    expect(resolveModelAlias('claude-opus-5-5')).toBe('claude-opus-5-5');
+    // 5.5 must not shadow 5: the shorter alias still resolves to Opus 5.
+    expect(resolveModelAlias('opus-5')).toBe('claude-opus-5');
   });
 
-  it('does not let opus-5 shadow the older opus aliases', () => {
-    expect(resolveModelAlias('opus')).toBe('claude-opus-4-5-20250514');
+  it('resolves the grok aliases to the Cursor CLI model id', () => {
+    expect(resolveModelAlias('grok')).toBe('grok-4.7-high'); // bare alias = latest
+    expect(resolveModelAlias('grok-4.5')).toBe('grok-4.5');
+    expect(resolveModelAlias('grok-4-5')).toBe('grok-4.5');
+    expect(resolveModelAlias('GROK')).toBe('grok-4.7-high');
+  });
+
+  it('bare opus tracks the latest Opus; versioned aliases keep their version', () => {
+    expect(resolveModelAlias('opus')).toBe('claude-opus-5-5');
+    expect(resolveModelAlias('opus-5')).toBe('claude-opus-5');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
   });
 
   it('is case-insensitive', () => {
-    expect(resolveModelAlias('Fable')).toBe('claude-fable-5');
+    expect(resolveModelAlias('Fable')).toBe('claude-fable-5-1');
     expect(resolveModelAlias('FABLE-5')).toBe('claude-fable-5');
-    expect(resolveModelAlias('Mythos')).toBe('claude-mythos-5');
-    expect(resolveModelAlias('MYTHOS-5')).toBe('claude-mythos-5');
-    expect(resolveModelAlias('OPUS')).toBe('claude-opus-4-5-20250514');
+    expect(resolveModelAlias('OPUS')).toBe('claude-opus-5-5');
   });
 
+  // Bare aliases (opus/grok/fable) track the LATEST version by policy; the
+  // versioned aliases below are the ones that must never move.
   it('preserves existing aliases (regression)', () => {
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5');
-    expect(resolveModelAlias('opus')).toBe('claude-opus-4-5-20250514');
+    expect(resolveModelAlias('opus')).toBe('claude-opus-5-5');
     expect(resolveModelAlias('opus-4-8')).toBe('claude-opus-4-8');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
   });
 
   it('passes unknown / already-canonical model strings through unchanged', () => {
+    // `mythos` was removed on 2026-09-22 (not generally available): it is now an unknown string.
+    expect(resolveModelAlias('mythos')).toBe('mythos');
+    expect(resolveModelAlias('mythos-5')).toBe('mythos-5');
     expect(resolveModelAlias('claude-fable-5')).toBe('claude-fable-5');
     expect(resolveModelAlias('gpt-5.4')).toBe('gpt-5.4');
     expect(resolveModelAlias('some-unknown-model')).toBe('some-unknown-model');
@@ -88,13 +103,10 @@ describe('model alias resolution', () => {
 });
 
 describe('model display labels', () => {
-  it('labels fable and mythos models', () => {
+  it('labels fable models', () => {
     expect(modelDisplayName('claude-fable-5')).toBe('Fable 5');
     expect(modelDisplayName('fable')).toBe('Fable 5');
     expect(modelDisplayName('anthropic/claude-fable-5-project')).toBe('Fable 5');
-    expect(modelDisplayName('claude-mythos-5')).toBe('Mythos 5');
-    expect(modelDisplayName('mythos')).toBe('Mythos 5');
-    expect(modelDisplayName('anthropic/claude-mythos-5-project')).toBe('Mythos 5');
   });
 
   it('labels opus 5 distinctly from the opus 4 family', () => {
@@ -105,6 +117,12 @@ describe('model display labels', () => {
     expect(modelDisplayName('claude-opus-4-8')).toBe('Opus 4 (Premium)');
   });
 
+  it('labels opus 5.5 distinctly from opus 5', () => {
+    // `claude-opus-5-5` contains the `opus-5` substring; the 5.5 arm must win.
+    expect(modelDisplayName('claude-opus-5-5')).toBe('Opus 5.5');
+    expect(modelDisplayName('claude-opus-5')).toBe('Opus 5');
+  });
+
   it('preserves existing model labels (regression)', () => {
     expect(modelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5 (Cheap)');
     expect(modelDisplayName('claude-sonnet-4-20250514')).toBe('Sonnet 4 (Balanced)');
@@ -112,6 +130,7 @@ describe('model display labels', () => {
   });
 
   it('falls back to the raw model string when unrecognized', () => {
+    expect(modelDisplayName('mythos')).toBe('mythos'); // no longer labelled
     expect(modelDisplayName('gpt-5.4')).toBe('gpt-5.4');
   });
 });
@@ -130,6 +149,17 @@ describe('TUI model abbreviations', () => {
     ['cursor-grok-4.6-medium-fast', 'g4.6-md-f'],
     ['cursor-grok-4.6-high-fast', 'g4.6-hi-f'],
     ['cursor-grok-4.6-xhigh-fast', 'g4.6-xh-f'],
+    ['claude-opus-5-5', 'opus-5.5'],
+    ['grok-4.7', 'grok-4.7'],
+    ['grok-4-7', 'grok-4.7'],
+    ['grok-4.7-high', 'grok-4.7'],
+    ['grok-4.7-low', 'g4.7-lo'],
+    ['grok-4.7-medium', 'g4.7-med'],
+    ['grok-4.7-xhigh', 'g4.7-xhi'],
+    ['grok-4.7-low-fast', 'g4.7-lo-f'],
+    ['grok-4.7-medium-fast', 'g4.7-md-f'],
+    ['grok-4.7-high-fast', 'g4.7-hi-f'],
+    ['grok-4.7-xhigh-fast', 'g4.7-xh-f'],
   ])('displays %s as %s without overflowing the MODEL column', (model, label) => {
     expect(abbrevModel(model)).toBe(label);
     expect(label.length).toBeLessThanOrEqual(9);
@@ -141,9 +171,8 @@ describe('TUI model abbreviations', () => {
     expect(abbrevModel('future-model')).toBe('future-model');
   });
 
-  it('abbreviates fable and mythos model ids', () => {
+  it('abbreviates fable model ids', () => {
     expect(abbrevModel('claude-fable-5')).toBe('fable-5');
-    expect(abbrevModel('claude-mythos-5')).toBe('myth-5');
   });
 
   it('abbreviates opus 5 and the Cursor grok model id', () => {

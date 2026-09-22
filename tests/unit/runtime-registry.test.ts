@@ -46,6 +46,10 @@ describe('runtime registry', () => {
   it('returns runtime-specific default models', () => {
     expect(getDefaultModelForRuntime('codex')).toBe('gpt-5.4');
     expect(getDefaultModelForRuntime('claude-agent-sdk')).toBe('claude-haiku-4-5-20251001');
+    // The Claude CLI runtimes default to the BARE alias so an agent with no model set
+    // re-resolves to the latest Opus at every spawn, rather than pinning one version.
+    expect(getDefaultModelForRuntime('claude-code-cli')).toBe('opus');
+    expect(getDefaultModelForRuntime('claude-code-local')).toBe('opus');
   });
 
   it('honors explicit configured defaults when provided', () => {
@@ -83,8 +87,6 @@ describe('runtime registry', () => {
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'haiku')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable-5')).toEqual([]);
-    expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'mythos')).toEqual([]);
-    expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'mythos-5')).toEqual([]);
   });
 
   it.each(['astra-6', 'ASTRA-6', 'gpt-6-astra'])('validates the Astra model %s as OpenAI', (model) => {
@@ -94,7 +96,8 @@ describe('runtime registry', () => {
     ]);
   });
 
-  it.each(['grok-4.6', 'grok-4-6', 'cursor-grok-4.6-high', 'cursor-grok-4.6-xhigh-fast'])(
+  // Grok 4.6 ids carry a `cursor-` prefix; 4.5 and 4.7 do not. All must classify as Cursor.
+  it.each(['grok', 'grok-4.5', 'grok-4.6', 'grok-4-6', 'cursor-grok-4.6-high', 'cursor-grok-4.6-xhigh-fast', 'grok-4.7', 'grok-4-7', 'grok-4.7-high', 'grok-4.7-xhigh-fast'])(
     'requires cursor-cli for %s', (model) => {
       expect(validateRuntimeModelCompatibility('cursor-cli', model)).toEqual([]);
       for (const runtime of ['codex', 'claude-code-cli', 'claude-agent-sdk']) {
@@ -105,10 +108,10 @@ describe('runtime registry', () => {
     },
   );
 
-  it('treats fable/mythos short names as the Claude family', () => {
+  it('treats fable short names as the Claude family', () => {
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable')).toEqual([]);
-    expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'mythos')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-code-cli', 'claude-fable-5')).toEqual([]);
+    // The mythos SHORT NAME is gone, but a canonical claude-* id still classifies as Claude (passthrough).
     expect(validateRuntimeModelCompatibility('claude-code-cli', 'claude-mythos-5')).toEqual([]);
     // ...and therefore incompatible with the codex (OpenAI) runtime
     expect(validateRuntimeModelCompatibility('codex', 'fable')).toEqual([
