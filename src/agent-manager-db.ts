@@ -810,6 +810,59 @@ export class AgentManagerDb {
     return { agent: matches[0], teamId: matches[0].team_id };
   }
 
+  /** Sorted, de-duplicated team names for a set of agent rows (error messages). */
+  private async teamNamesOf(agents: AgentRow[]): Promise<string[]> {
+    const names = new Set<string>();
+    for (const id of new Set(agents.map(a => a.team_id))) {
+      const row = await this.db.teams.getTeam(id);
+      names.add(row?.name ?? id);
+    }
+    return [...names].sort();
+  }
+
+  /**
+   * Resolve the caller of a task-lifecycle route (claim/done) together with
+   * the team the task lookup should run in.
+   *
+   * In-team lookup first. When the request carries no explicit team, fall
+   * back across teams — but the same alias is often deployed to several
+   * teams (`seniordev` in newtrade, dappa and idchain), so a bare name can be
+   * ambiguous. In that case disambiguate by the task itself: keep only the
+   * teams that own a task matching `taskRef`, and accept a single survivor.
+   * `ambiguous` is set when the caller matched several teams and the task
+   * could not settle it, so routes can tell the agent to send X-Id-Team.
+   */
+  private async resolveCallerForTask(
+    req: express.Request,
+    teamId: string,
+    callerRef: string,
+    taskRef: string,
+  ): Promise<{ agent?: AgentRow; teamId: string; error?: string; ambiguous?: boolean }> {
+    const first = await this.resolveSingleAgentForCommand(teamId, callerRef);
+    if (first.agent) return { agent: first.agent, teamId };
+    if (this.isTeamExplicit(req)) return { teamId, error: first.error };
+
+    const matches = await this.db.agents.resolveAcrossTeams(callerRef);
+    if (matches.length === 1) return { agent: matches[0], teamId: matches[0].team_id };
+    if (matches.length === 0) return { teamId, error: first.error };
+
+    const owningTask: AgentRow[] = [];
+    for (const m of matches) {
+      const { task } = await this.resolveTaskRef(taskRef, m.team_id);
+      if (task) owningTask.push(m);
+    }
+    if (owningTask.length === 1) return { agent: owningTask[0], teamId: owningTask[0].team_id };
+
+    const teams = await this.teamNamesOf(matches);
+    return {
+      teamId,
+      ambiguous: true,
+      error: `Agent "${callerRef}" exists in ${teams.length} teams (${teams.join(', ')}) and task "${taskRef}" `
+        + (owningTask.length === 0 ? 'was not found in any of them' : 'exists in more than one')
+        + '. Send the X-Id-Team header (X-Id-Team: $ID_TEAM) to pick the team.',
+    };
+  }
+
   private async getTeam(req: express.Request): Promise<{ name: string; id: string }> {
     // If the middleware has already resolved the context, use it directly
     const ctx = (req as any).ctx;
@@ -4540,10 +4593,19 @@ export class AgentManagerDb {
           const first = await this.resolveSingleAgentForCommand(teamId, from);
           callerAgent = first.agent;
           if (!callerAgent && !this.isTeamExplicit(req) && !teamRef) {
-            const fallback = await this.resolveCallerAcrossTeams(from);
-            if (fallback) {
-              callerAgent = fallback.agent;
-              teamId = fallback.teamId;
+            const matches = await this.db.agents.resolveAcrossTeams(from);
+            if (matches.length === 1) {
+              callerAgent = matches[0];
+              teamId = matches[0].team_id;
+            } else if (matches.length > 1) {
+              // Same alias deployed to several teams and nothing to pick one:
+              // creating the task in the default team would file it where no
+              // teammate can see, claim or close it. Refuse instead.
+              const teams = await this.teamNamesOf(matches);
+              return res.status(400).json({
+                error: `Agent "${from}" exists in ${teams.length} teams (${teams.join(', ')}). `
+                  + 'Send the X-Id-Team header (X-Id-Team: $ID_TEAM) or ?team= so the task is created in the right team.',
+              });
             }
           }
           if (callerAgent) createdBy = callerAgent.id;
@@ -4667,16 +4729,12 @@ export class AgentManagerDb {
         // get "agent not found" even though the agent is registered in its
         // own team. The fallback only runs when the caller didn't specify a
         // team explicitly, so cross-team guards still hold for explicit
-        // requests.
-        let { agent, error } = await this.resolveSingleAgentForCommand(teamId, callerRef);
-        if (!agent && !this.isTeamExplicit(req)) {
-          const fallback = await this.resolveCallerAcrossTeams(callerRef);
-          if (fallback) {
-            agent = fallback.agent;
-            teamId = fallback.teamId;
-          }
-        }
-        if (!agent) return res.status(404).json({ error: error || `Agent "${callerRef}" not found` });
+        // requests; an alias deployed to several teams is settled by which
+        // team owns the task (see resolveCallerForTask).
+        const resolved = await this.resolveCallerForTask(req, teamId, callerRef, req.params.ref);
+        const agent = resolved.agent;
+        teamId = resolved.teamId;
+        if (!agent) return res.status(404).json({ error: resolved.error || `Agent "${callerRef}" not found` });
 
         const { task, error: taskError } = await this.resolveTaskRef(req.params.ref, teamId);
         if (!task) return res.status(404).json({ error: taskError || `Task "${req.params.ref}" not found` });
@@ -4720,15 +4778,12 @@ export class AgentManagerDb {
         // protocol (`POST $MANAGER_URL/tasks/<name>/done { agent_id }`).
         let callerAgent: AgentRow | undefined;
         if (callerRef && typeof callerRef === 'string') {
-          const first = await this.resolveSingleAgentForCommand(teamId, callerRef);
-          callerAgent = first.agent;
-          if (!callerAgent && !this.isTeamExplicit(req)) {
-            const fallback = await this.resolveCallerAcrossTeams(callerRef);
-            if (fallback) {
-              callerAgent = fallback.agent;
-              teamId = fallback.teamId;
-            }
-          }
+          const resolved = await this.resolveCallerForTask(req, teamId, callerRef, req.params.ref);
+          // A caller whose alias spans several teams, none of which settles
+          // the task, must not silently fall through to the default team.
+          if (resolved.ambiguous) return res.status(404).json({ error: resolved.error });
+          callerAgent = resolved.agent;
+          teamId = resolved.teamId;
         }
 
         const { task, error: taskError } = await this.resolveTaskRef(req.params.ref, teamId);
@@ -5467,6 +5522,19 @@ export class AgentManagerDb {
         return { error: `Short id ${ref} is ambiguous (matches ${filtered.length}): ${widened}. Widen the prefix.` };
       }
       return { task: filtered[0] };
+    }
+    // Full uuid (dashed or bare 32-hex). Agents get the uuid back from
+    // POST /tasks and GET /tasks, so `/tasks/<uuid>/claim` must work as
+    // well as the name form; otherwise the uuid falls through to the
+    // name lookup and 404s.
+    const bareHex = ref.replace(/-/g, '').toLowerCase();
+    if (/^[0-9a-f]{32}$/.test(bareHex)) {
+      const matches = await this.db.tasks.getByUuidPrefix(bareHex.slice(0, 8));
+      const task = matches.find(t =>
+        (t.uuid || '').replace(/-/g, '').toLowerCase() === bareHex
+        && (!teamId || t.team_id === teamId));
+      if (!task) return { error: `Task "${ref}" not found` };
+      return { task };
     }
     // Name-based resolution: scope to the team when teamId is provided
     if (teamId) {
