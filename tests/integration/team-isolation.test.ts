@@ -26,6 +26,7 @@ import { SqliteSchedulesRepo } from '../../src/db/repos/sqlite/schedules-repo.js
 import { SqliteTasksRepo } from '../../src/db/repos/sqlite/tasks-repo.js';
 import { SqliteEventsRepo } from '../../src/db/repos/sqlite/events-repo.js';
 import { SqliteSubscriptionsRepo } from '../../src/db/repos/sqlite/subscriptions-repo.js';
+import { SqliteCheckinsRepo } from '../../src/db/repos/sqlite/checkins-repo.js';
 import type { AgentRow, TaskRow } from '../../src/db/types.js';
 
 // --- DB factory helper (in-memory) ---
@@ -42,6 +43,8 @@ async function createInMemoryDb() {
     tasks: new SqliteTasksRepo(adapter),
     events: new SqliteEventsRepo(adapter),
     subscriptions: new SqliteSubscriptionsRepo(adapter),
+    // POST /tasks/:ref/done auto-closes linked checkins; the route needs the repo.
+    checkins: new SqliteCheckinsRepo(adapter),
     async close() { await adapter.close(); },
   };
 }
@@ -515,5 +518,134 @@ describe('Non-existent team — non-admin gets 404', () => {
     expect(res.ok).toBe(true);
     const body = await res.json() as any;
     expect(body.agents).toEqual([]);
+  });
+});
+
+// =====================================================================
+// Task lifecycle by name and uuid when the caller's alias spans teams
+// =====================================================================
+//
+// Regression for the newtrade incident (2026-09-26): `seniordev` exists in
+// three teams, so a header-less `POST /tasks { from }` could not recover the
+// caller's team and silently filed the task in `default`; devlead's
+// `/tasks/<name>/claim` and `/tasks/<uuid>/claim` then 404'd in newtrade.
+
+describe('task lifecycle — shared alias across teams, name and uuid refs', () => {
+  const sharedName = `shared-agent-${Date.now()}`;
+  const noTeamHeaders = { 'Content-Type': 'application/json' };
+  let publicTaskName: string;
+  let publicTaskUuid: string;
+
+  beforeAll(async () => {
+    // Same alias registered in both teams — the ambiguous case.
+    const db = (manager as any).db;
+    const now = Math.floor(Date.now() / 1000);
+    for (const teamId of [idchainTeamId, publicTeamId]) {
+      await db.agents.create({
+        team_id: teamId,
+        id: `agent-${randomUUID()}`,
+        name: sharedName,
+        type: 'claude',
+        model: 'sonnet',
+        status: 'running',
+        created_at: now,
+        port: 4103,
+        runtime: 'claude-agent-sdk',
+      });
+    }
+  });
+
+  it('POST /tasks with an ambiguous `from` and no team header is refused, not filed in default', async () => {
+    const name = `ambiguous-create-${Date.now()}`;
+    const res = await fetch(`${baseUrl}/tasks`, {
+      method: 'POST',
+      headers: noTeamHeaders,
+      body: JSON.stringify({ title: 'Ambiguous', name, from: sharedName }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as any;
+    expect(body.error).toContain('X-Id-Team');
+    expect(body.error).toContain('idchain');
+    expect(body.error).toContain('public');
+
+    const listed = await fetch(`${baseUrl}/tasks`, { headers: adminHeaders('default') });
+    const names = ((await listed.json()) as any).tasks.map((t: any) => t.name);
+    expect(names).not.toContain(name);
+  });
+
+  it('POST /tasks with the team header creates the task in that team', async () => {
+    publicTaskName = `shared-public-${Date.now()}`;
+    const res = await fetch(`${baseUrl}/tasks`, {
+      method: 'POST',
+      headers: makeHeaders('public'),
+      body: JSON.stringify({ title: 'Shared alias task', name: publicTaskName, from: sharedName }),
+    });
+    expect(res.ok, await res.clone().text()).toBe(true);
+    const body = await res.json() as any;
+    expect(body.task.teamName).toBe('public');
+    expect(body.task.uuid).toMatch(/^[0-9a-f-]{36}$/);
+    publicTaskUuid = body.task.uuid;
+  });
+
+  it('GET /tasks/<uuid> resolves a full uuid within the team', async () => {
+    const res = await fetch(`${baseUrl}/tasks/${publicTaskUuid}`, { headers: makeHeaders('public') });
+    expect(res.ok, await res.clone().text()).toBe(true);
+    expect(((await res.json()) as any).task.name).toBe(publicTaskName);
+
+    const other = await fetch(`${baseUrl}/tasks/${publicTaskUuid}`, { headers: makeHeaders('idchain') });
+    expect(other.status).toBe(404);
+  });
+
+  it('claim by name without a team header: the ambiguous alias is settled by the task\'s team', async () => {
+    const res = await fetch(`${baseUrl}/tasks/${publicTaskName}/claim`, {
+      method: 'POST',
+      headers: noTeamHeaders,
+      body: JSON.stringify({ agent_id: sharedName }),
+    });
+    expect(res.ok, await res.clone().text()).toBe(true);
+    const body = await res.json() as any;
+    expect(body.task.status).toBe('doing');
+    expect(body.task.teamName).toBe('public');
+    expect(body.task.ownerName).toBe(sharedName);
+  });
+
+  it('done by full uuid without a team header', async () => {
+    const res = await fetch(`${baseUrl}/tasks/${publicTaskUuid}/done`, {
+      method: 'POST',
+      headers: noTeamHeaders,
+      body: JSON.stringify({ agent_id: sharedName }),
+    });
+    expect(res.ok, await res.clone().text()).toBe(true);
+    expect(((await res.json()) as any).task.status).toBe('done');
+  });
+
+  it('claim by uuid with the team header', async () => {
+    const create = await fetch(`${baseUrl}/tasks`, {
+      method: 'POST',
+      headers: makeHeaders('idchain'),
+      body: JSON.stringify({ title: 'Uuid claim', from: sharedName }),
+    });
+    expect(create.ok, await create.clone().text()).toBe(true);
+    const { task } = (await create.json()) as any;
+
+    const res = await fetch(`${baseUrl}/tasks/${task.uuid}/claim`, {
+      method: 'POST',
+      headers: makeHeaders('idchain'),
+      body: JSON.stringify({ agent_id: sharedName }),
+    });
+    expect(res.ok, await res.clone().text()).toBe(true);
+    const body = await res.json() as any;
+    expect(body.task.status).toBe('doing');
+    expect(body.task.teamName).toBe('idchain');
+  });
+
+  it('ambiguous alias with a task in neither team gets a pointer to X-Id-Team, not a default-team miss', async () => {
+    const res = await fetch(`${baseUrl}/tasks/no-such-task-${Date.now()}/claim`, {
+      method: 'POST',
+      headers: noTeamHeaders,
+      body: JSON.stringify({ agent_id: sharedName }),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as any).error).toContain('X-Id-Team');
   });
 });

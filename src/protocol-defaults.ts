@@ -49,6 +49,10 @@ and \`skills/inter-agent/SKILL.md\` (section "Dispatch brief template") for
 the full guidance.
 
 ### Lifecycle
+Send \`-H "X-Id-Team: $ID_TEAM"\` on every call. \`$MANAGER_URL\` and \`$ID_TEAM\`
+are set in your environment. Without the header the manager guesses your team
+from your name, which fails when the same name exists in several teams.
+\`<name>\` may also be the task's uuid or \`#shortId\`.
 1. **Create**: \`POST $MANAGER_URL/tasks\` with \`{ title, name, from: "<your-name>" }\`
 2. **Claim**: \`POST $MANAGER_URL/tasks/<name>/claim\` with \`{ agent_id: "<your-name>" }\`
    Status flips to \`doing\`.

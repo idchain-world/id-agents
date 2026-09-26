@@ -56,6 +56,11 @@ lifecycle below: create → claim → do → done.
 
 ## The lifecycle
 
+Send `-H "X-Id-Team: $ID_TEAM"` on every call (`$MANAGER_URL` and `$ID_TEAM` are in
+your environment). Without it the manager guesses your team from your name, which
+fails when the same name exists in several teams. `<name>` may also be the task's
+uuid or `#shortId`.
+
 1. Create: `POST $MANAGER_URL/tasks` with `{title, name, from: <your-name> }`
 2. Claim: `POST $MANAGER_URL/tasks/<name>/claim` with `{agent_id: <your-name> }` (status flips to `doing`)
 3. Do the work. Write artifacts to `./output/` in your working directory.
