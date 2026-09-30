@@ -39,7 +39,8 @@ export const CLAUDE_MODELS = {
   OPUS: 'claude-opus-4-20250514',          // Most capable: $15/$75 per 1M tokens
   FABLE: 'claude-fable-5',                 // Fable 5: $10/$50 per 1M tokens
   FABLE_5_1: 'claude-fable-5-1',           // Fable 5.1: $10/$50 per 1M tokens
-  OPUS_5_5: 'claude-opus-5-5'              // Opus 5.5
+  OPUS_5_5: 'claude-opus-5-5',             // Opus 5.5
+  SONNET_5_5: 'claude-sonnet-5-5'          // Sonnet 5.5
 } as const;
 
 /**
@@ -48,6 +49,11 @@ export const CLAUDE_MODELS = {
  */
 export function modelDisplayName(model: string): string {
   return model.includes('haiku') ? 'Haiku 4.5 (Cheap)' :
+         // Longest first: `claude-sonnet-5-5` contains `sonnet-5`, and the
+         // generic `sonnet` arm would otherwise label both as Sonnet 4.
+         // `claude-sonnet-4-5-…` does not contain `sonnet-5`.
+         model.includes('sonnet-5-5') || model.includes('sonnet-5.5') ? 'Sonnet 5.5' :
+         model.includes('sonnet-5') ? 'Sonnet 5' :
          model.includes('sonnet') ? 'Sonnet 4 (Balanced)' :
          // Must precede the generic `opus` arm, which would otherwise label
          // Opus 5 as "Opus 4 (Premium)". Matches `claude-opus-5` and any future

@@ -12,6 +12,12 @@ describe('model alias resolution', () => {
   it.each([
     ['astra-6', 'gpt-6-astra'],
     ['ASTRA-6', 'gpt-6-astra'],
+    ['sol-6.1', 'gpt-6.1-sol'],
+    ['sol-6-1', 'gpt-6.1-sol'],
+    ['SOL-6.1', 'gpt-6.1-sol'],
+    ['sonnet-5.5', 'claude-sonnet-5-5'],
+    ['sonnet-5-5', 'claude-sonnet-5-5'],
+    ['sonnet5.5', 'claude-sonnet-5-5'],
     ['grok-4.6', 'cursor-grok-4.6-high'],
     ['grok-4-6', 'cursor-grok-4.6-high'],
     ['GROK-4.6', 'cursor-grok-4.6-high'],
@@ -25,6 +31,8 @@ describe('model alias resolution', () => {
 
   it.each([
     'gpt-6-astra',
+    'gpt-6.1-sol',
+    'claude-sonnet-5-5',
     'cursor-grok-4.6-low',
     'cursor-grok-4.6-medium',
     'cursor-grok-4.6-high',
@@ -64,6 +72,14 @@ describe('model alias resolution', () => {
     expect(resolveModelAlias('GROK')).toBe('grok-4.7-high');
   });
 
+  it('bare sonnet tracks the latest Sonnet; versioned aliases keep their version', () => {
+    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5');
+    expect(resolveModelAlias('SONNET')).toBe('claude-sonnet-5-5');
+    // 5.5 must not shadow 5: the shorter aliases still resolve to Sonnet 5.
+    expect(resolveModelAlias('sonnet-5')).toBe('claude-sonnet-5');
+    expect(resolveModelAlias('sonnet5')).toBe('claude-sonnet-5');
+  });
+
   it('bare opus tracks the latest Opus; versioned aliases keep their version', () => {
     expect(resolveModelAlias('opus')).toBe('claude-opus-5-5');
     expect(resolveModelAlias('opus-5')).toBe('claude-opus-5');
@@ -80,7 +96,8 @@ describe('model alias resolution', () => {
   // versioned aliases below are the ones that must never move.
   it('preserves existing aliases (regression)', () => {
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
-    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5');
+    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5');
+    expect(resolveModelAlias('sonnet-5')).toBe('claude-sonnet-5');
     expect(resolveModelAlias('opus')).toBe('claude-opus-5-5');
     expect(resolveModelAlias('opus-4-8')).toBe('claude-opus-4-8');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
@@ -123,6 +140,14 @@ describe('model display labels', () => {
     expect(modelDisplayName('claude-opus-5')).toBe('Opus 5');
   });
 
+  it('labels sonnet 5.5 and sonnet 5 distinctly from sonnet 4', () => {
+    // `claude-sonnet-5-5` contains the `sonnet-5` substring; the 5.5 arm must win.
+    expect(modelDisplayName('claude-sonnet-5-5')).toBe('Sonnet 5.5');
+    expect(modelDisplayName('claude-sonnet-5')).toBe('Sonnet 5');
+    // `sonnet-4-5` must not match the `sonnet-5` substring.
+    expect(modelDisplayName('claude-sonnet-4-5-20250514')).toBe('Sonnet 4 (Balanced)');
+  });
+
   it('preserves existing model labels (regression)', () => {
     expect(modelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5 (Cheap)');
     expect(modelDisplayName('claude-sonnet-4-20250514')).toBe('Sonnet 4 (Balanced)');
@@ -150,6 +175,11 @@ describe('TUI model abbreviations', () => {
     ['cursor-grok-4.6-high-fast', 'g4.6-hi-f'],
     ['cursor-grok-4.6-xhigh-fast', 'g4.6-xh-f'],
     ['claude-opus-5-5', 'opus-5.5'],
+    ['claude-sonnet-5-5', 'sonn-5.5'],
+    ['sonnet', 'sonn-5.5'],
+    ['gpt-6.1-sol', 'sol-6.1'],
+    ['sol-6.1', 'sol-6.1'],
+    ['sol-6-1', 'sol-6.1'],
     ['grok-4.7', 'grok-4.7'],
     ['grok-4-7', 'grok-4.7'],
     ['grok-4.7-high', 'grok-4.7'],

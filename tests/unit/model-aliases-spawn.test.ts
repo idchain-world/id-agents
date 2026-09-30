@@ -16,6 +16,8 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
     expect(resolveModelAlias('astra-6')).toBe('gpt-6-astra');
+    expect(resolveModelAlias('sol-6.1')).toBe('gpt-6.1-sol');
+    expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5');
     expect(resolveModelAlias('grok-4.6')).toBe('cursor-grok-4.6-high');
   });
 
@@ -34,6 +36,8 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
       'cursor-grok-4.6-high',
       'claude-opus-5-5',
       'grok-4.7-high',
+      'claude-sonnet-5-5',
+      'gpt-6.1-sol',
     ]) {
       expect(resolveModelAlias(id)).toBe(id);
       // resolving twice must equal resolving once
