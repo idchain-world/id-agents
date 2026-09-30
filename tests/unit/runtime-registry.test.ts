@@ -84,12 +84,15 @@ describe('runtime registry', () => {
   it('accepts models from the matching provider family', () => {
     expect(validateRuntimeModelCompatibility('codex', 'gpt-5.4')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-code-cli', 'claude-sonnet-4-20250514')).toEqual([]);
+    expect(validateRuntimeModelCompatibility('claude-code-cli', 'sonnet')).toEqual([]);
+    expect(validateRuntimeModelCompatibility('claude-code-cli', 'sonnet-5.5')).toEqual([]);
+    expect(validateRuntimeModelCompatibility('claude-code-cli', 'claude-sonnet-5-5')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'haiku')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable')).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable-5')).toEqual([]);
   });
 
-  it.each(['astra-6', 'ASTRA-6', 'gpt-6-astra'])('validates the Astra model %s as OpenAI', (model) => {
+  it.each(['astra-6', 'ASTRA-6', 'gpt-6-astra', 'sol-6.1', 'sol-6-1', 'gpt-6.1-sol'])('validates the Codex model %s as OpenAI', (model) => {
     expect(validateRuntimeModelCompatibility('codex', model)).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-code-cli', model)).toEqual([
       { code: 'runtime_model_mismatch', message: `runtime "claude-code-cli" is incompatible with OpenAI model "${model}"` },

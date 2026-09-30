@@ -169,12 +169,12 @@ See [QUICKSTART Step 4](./QUICKSTART.md) for the full detection commands.
 
 ### Connecting a Manager
 
-Model aliases include `astra-6` → `gpt-6-astra` (use runtime `codex`) and
-`grok-4.6` → `cursor-grok-4.6-high` (use runtime `cursor-cli`). The TUI displays
-these as `astra-6` and `grok-4.6`. Other Grok 4.6 effort/Fast variants keep distinct
+Model aliases include `astra-6` → `gpt-6-astra` and `sol-6.1` → `gpt-6.1-sol`
+(use runtime `codex`), and `grok-4.6` → `cursor-grok-4.6-high` (use runtime
+`cursor-cli`). The TUI displays these as `astra-6`, `sol-6.1` and `grok-4.6`. Other Grok 4.6 effort/Fast variants keep distinct
 short labels. Bare aliases always select the latest version: `opus` → `claude-opus-5-5`,
-`grok` → `grok-4.7-high`, `fable` → `claude-fable-5-1`. Versioned aliases such as
-`grok-4.5`, `opus-5` and `fable-5` stay pinned.
+`sonnet` → `claude-sonnet-5-5`, `grok` → `grok-4.7-high`, `fable` → `claude-fable-5-1`.
+Versioned aliases such as `grok-4.5`, `opus-5`, `sonnet-5` and `fable-5` stay pinned.
 Changing a model does not automatically change its runtime; use `/update <agent>
 --runtime <runtime>` as needed, then restart that agent to apply its configuration.
 These aliases and labels require clients and the manager built from this version;

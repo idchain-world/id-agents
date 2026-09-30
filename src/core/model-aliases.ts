@@ -9,10 +9,13 @@
  */
 export const MODEL_ALIASES: Record<string, string> = {
   'haiku': 'claude-haiku-4-5-20251001',
-  'sonnet': 'claude-sonnet-5',
+  // Bare aliases track the LATEST version; versioned aliases stay pinned.
+  'sonnet': 'claude-sonnet-5-5',
   'sonnet-5': 'claude-sonnet-5',
   'sonnet5': 'claude-sonnet-5',
-  // Bare aliases track the LATEST version; versioned aliases stay pinned.
+  'sonnet-5.5': 'claude-sonnet-5-5',
+  'sonnet-5-5': 'claude-sonnet-5-5',
+  'sonnet5.5': 'claude-sonnet-5-5',
   'opus': 'claude-opus-5-5',
   'opus-4-8': 'claude-opus-4-8',
   'opus-4.8': 'claude-opus-4-8',
@@ -27,6 +30,8 @@ export const MODEL_ALIASES: Record<string, string> = {
   'fable-5-1': 'claude-fable-5-1',
   // OpenAI Codex. Keep the requested short name distinct from the provider ID.
   'astra-6': 'gpt-6-astra',
+  'sol-6.1': 'gpt-6.1-sol',
+  'sol-6-1': 'gpt-6.1-sol',
   // Cursor CLI first-party models. Resolution is runtime-agnostic (the `/model`
   // command resolves before storing), so non-Claude ids belong here too.
   'grok': 'grok-4.7-high',
