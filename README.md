@@ -11,7 +11,7 @@
 
 **Version 0.1.110-beta**
 
-Run a team of AI coding agents from a single chat. Each agent is a real process with full tool access — **Claude Code CLI**, **OpenAI Codex**, **Cursor CLI**, or a mix. No UI needed. Connect from any terminal, Telegram, or SSH session.
+A Swarm OS for your agents. Run a swarm of AI coding agents from a single chat. Each agent is a real process with full tool access — **Claude Code CLI**, **OpenAI Codex**, **Cursor CLI**, or a mix. No UI needed. Connect from any terminal, Telegram, or SSH session.
 
 ## Key Features
 
