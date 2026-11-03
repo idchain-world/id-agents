@@ -77,6 +77,15 @@ export class PgEventsRepo implements EventsRepository {
     return seq === null || seq === undefined ? null : Number(seq);
   }
 
+  async latestSeq(teamId: string): Promise<number | null> {
+    const { rows } = await this.db.query<{ seq: string | number | null }>(
+      `SELECT MAX(seq) AS seq FROM event_log WHERE team_id = $1`,
+      [teamId],
+    );
+    const seq = rows[0]?.seq;
+    return seq === null || seq === undefined ? null : Number(seq);
+  }
+
   async pruneByAge(teamId: string, beforeOccurredAt: number): Promise<number> {
     const { rowCount } = await this.db.query(
       `DELETE FROM event_log WHERE team_id = $1 AND occurred_at < $2`,
