@@ -255,7 +255,7 @@ function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | '
   // Grok 4.6 ids carry a `cursor-` prefix; 4.5 and 4.7 do not. Both are Cursor-served.
   if (normalized.startsWith('cursor-grok-') || normalized.startsWith('grok-')) return 'cursor';
 
-  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1'].includes(normalized) || normalized.startsWith('claude')) {
+  if (['haiku', 'sonnet', 'opus', 'fable', 'fable-5', 'fable-5-1', 'fable-5-2'].includes(normalized) || normalized.startsWith('claude')) {
     return 'claude';
   }
 

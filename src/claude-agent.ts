@@ -38,6 +38,7 @@ export const CLAUDE_MODELS = {
   SONNET: 'claude-sonnet-4-20250514',      // Balanced: $3/$15 per 1M tokens
   OPUS: 'claude-opus-4-20250514',          // Most capable: $15/$75 per 1M tokens
   FABLE: 'claude-fable-5',                 // Fable 5: $10/$50 per 1M tokens
+  FABLE_5_2: 'claude-fable-5-2',           // Fable 5.2
   FABLE_5_1: 'claude-fable-5-1',           // Fable 5.1: $10/$50 per 1M tokens
   OPUS_5_5: 'claude-opus-5-5',             // Opus 5.5
   SONNET_5_5: 'claude-sonnet-5-5'          // Sonnet 5.5
@@ -62,6 +63,7 @@ export function modelDisplayName(model: string): string {
          model.includes('opus-5-5') || model.includes('opus-5.5') ? 'Opus 5.5' :
          model.includes('opus-5') ? 'Opus 5' :
          model.includes('opus') ? 'Opus 4 (Premium)' :
+         model.includes('fable-5-2') || model.includes('fable-5.2') ? 'Fable 5.2' :
          model.includes('fable-5-1') || model.includes('fable-5.1') ? 'Fable 5.1' :
          model.includes('fable') ? 'Fable 5' : model;
 }
