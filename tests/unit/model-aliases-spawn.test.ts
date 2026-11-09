@@ -12,7 +12,7 @@ import { resolveModelAlias } from '../../src/core/model-aliases.js';
 
 describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
   it('resolves short aliases to canonical model ids', () => {
-    expect(resolveModelAlias('fable')).toBe('claude-fable-5-1');
+    expect(resolveModelAlias('fable')).toBe('claude-fable-5-2');
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
     expect(resolveModelAlias('astra-6')).toBe('gpt-6-astra');
@@ -22,7 +22,7 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
   });
 
   it('is case-insensitive', () => {
-    expect(resolveModelAlias('Fable')).toBe('claude-fable-5-1');
+    expect(resolveModelAlias('Fable')).toBe('claude-fable-5-2');
     expect(resolveModelAlias('OPUS-4.8')).toBe('claude-opus-4-8');
   });
 

@@ -43,7 +43,10 @@ describe('model alias resolution', () => {
   });
 
   it('resolves the fable aliases to canonical model ids', () => {
-    expect(resolveModelAlias('fable')).toBe('claude-fable-5-1'); // bare alias = latest
+    expect(resolveModelAlias('fable')).toBe('claude-fable-5-2'); // bare alias = latest
+    expect(resolveModelAlias('fable-5.2')).toBe('claude-fable-5-2');
+    expect(resolveModelAlias('fable-5-2')).toBe('claude-fable-5-2');
+    expect(resolveModelAlias('fable-5.1')).toBe('claude-fable-5-1'); // versioned aliases stay pinned
     expect(resolveModelAlias('fable-5')).toBe('claude-fable-5');
   });
 
@@ -87,7 +90,7 @@ describe('model alias resolution', () => {
   });
 
   it('is case-insensitive', () => {
-    expect(resolveModelAlias('Fable')).toBe('claude-fable-5-1');
+    expect(resolveModelAlias('Fable')).toBe('claude-fable-5-2');
     expect(resolveModelAlias('FABLE-5')).toBe('claude-fable-5');
     expect(resolveModelAlias('OPUS')).toBe('claude-opus-5-5');
   });
