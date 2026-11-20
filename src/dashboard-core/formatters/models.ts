@@ -28,6 +28,10 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'sonnet': 'sonn-5.5',
 
   // OpenAI Codex
+  'gpt-6.2-astra': 'astra-6.2',
+  'astra': 'astra-6.2',
+  'astra-6.2': 'astra-6.2',
+  'astra-6-2': 'astra-6.2',
   'gpt-6-astra': 'astra-6',
   'astra-6': 'astra-6',
   'gpt-6.1-sol': 'sol-6.1',

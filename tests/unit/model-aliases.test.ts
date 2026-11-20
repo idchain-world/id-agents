@@ -10,6 +10,9 @@ import { abbrevRuntime } from '../../src/tui/util/runtime.js';
 
 describe('model alias resolution', () => {
   it.each([
+    ['astra', 'gpt-6.2-astra'], // bare alias = latest
+    ['astra-6.2', 'gpt-6.2-astra'],
+    ['astra-6-2', 'gpt-6.2-astra'],
     ['astra-6', 'gpt-6-astra'],
     ['ASTRA-6', 'gpt-6-astra'],
     ['sol-6.1', 'gpt-6.1-sol'],
@@ -30,6 +33,7 @@ describe('model alias resolution', () => {
   });
 
   it.each([
+    'gpt-6.2-astra',
     'gpt-6-astra',
     'gpt-6.1-sol',
     'claude-sonnet-5-5',
@@ -165,6 +169,10 @@ describe('model display labels', () => {
 
 describe('TUI model abbreviations', () => {
   it.each([
+    ['gpt-6.2-astra', 'astra-6.2'],
+    ['astra', 'astra-6.2'],
+    ['astra-6.2', 'astra-6.2'],
+    ['astra-6-2', 'astra-6.2'],
     ['gpt-6-astra', 'astra-6'],
     ['astra-6', 'astra-6'],
     ['grok-4.6', 'grok-4.6'],

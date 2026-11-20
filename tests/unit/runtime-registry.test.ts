@@ -92,7 +92,7 @@ describe('runtime registry', () => {
     expect(validateRuntimeModelCompatibility('claude-agent-sdk', 'fable-5')).toEqual([]);
   });
 
-  it.each(['astra-6', 'ASTRA-6', 'gpt-6-astra', 'sol-6.1', 'sol-6-1', 'gpt-6.1-sol'])('validates the Codex model %s as OpenAI', (model) => {
+  it.each(['astra', 'astra-6.2', 'gpt-6.2-astra', 'astra-6', 'ASTRA-6', 'gpt-6-astra', 'sol-6.1', 'sol-6-1', 'gpt-6.1-sol'])('validates the Codex model %s as OpenAI', (model) => {
     expect(validateRuntimeModelCompatibility('codex', model)).toEqual([]);
     expect(validateRuntimeModelCompatibility('claude-code-cli', model)).toEqual([
       { code: 'runtime_model_mismatch', message: `runtime "claude-code-cli" is incompatible with OpenAI model "${model}"` },

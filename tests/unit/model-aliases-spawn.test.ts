@@ -15,6 +15,7 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
     expect(resolveModelAlias('fable')).toBe('claude-fable-5-2');
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');
+    expect(resolveModelAlias('astra')).toBe('gpt-6.2-astra');
     expect(resolveModelAlias('astra-6')).toBe('gpt-6-astra');
     expect(resolveModelAlias('sol-6.1')).toBe('gpt-6.1-sol');
     expect(resolveModelAlias('sonnet')).toBe('claude-sonnet-5-5');
@@ -32,6 +33,7 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
       'claude-opus-4-8',
       'claude-haiku-4-5-20251001',
       'claude-sonnet-4-20250514',
+      'gpt-6.2-astra',
       'gpt-6-astra',
       'cursor-grok-4.6-high',
       'claude-opus-5-5',

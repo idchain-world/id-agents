@@ -31,6 +31,9 @@ export const MODEL_ALIASES: Record<string, string> = {
   'fable-5.1': 'claude-fable-5-1',
   'fable-5-1': 'claude-fable-5-1',
   // OpenAI Codex. Keep the requested short name distinct from the provider ID.
+  'astra': 'gpt-6.2-astra',
+  'astra-6.2': 'gpt-6.2-astra',
+  'astra-6-2': 'gpt-6.2-astra',
   'astra-6': 'gpt-6-astra',
   'sol-6.1': 'gpt-6.1-sol',
   'sol-6-1': 'gpt-6.1-sol',
