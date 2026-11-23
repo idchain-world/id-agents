@@ -10,6 +10,13 @@ import { abbrevRuntime } from '../../src/tui/util/runtime.js';
 
 describe('model alias resolution', () => {
   it.each([
+    ['neon', 'gemini-4-neon-high'],
+    ['neon-4', 'gemini-4-neon-high'],
+    ['neon4', 'gemini-4-neon-high'],
+    ['neon-low', 'gemini-4-neon-low'],
+    ['neon-medium', 'gemini-4-neon-medium'],
+    ['neon-high', 'gemini-4-neon-high'],
+    ['neon-xhigh', 'gemini-4-neon-xhigh'],
     ['astra', 'gpt-6.2-astra'], // bare alias = latest
     ['astra-6.2', 'gpt-6.2-astra'],
     ['astra-6-2', 'gpt-6.2-astra'],
@@ -237,6 +244,8 @@ describe('TUI runtime abbreviations', () => {
   it('abbreviates known runtimes and passes unknowns through', () => {
     expect(abbrevRuntime('claude-code-cli')).toBe('claude');
     expect(abbrevRuntime('cursor-cli')).toBe('cursor');
+    expect(abbrevRuntime('antigravity-cli')).toBe('antigravity');
+    expect(abbrevModel('gemini-4-neon-high')).toBe('neon-4 high');
     expect(abbrevRuntime('codex')).toBe('codex');
     expect(abbrevRuntime(undefined)).toBe('—');
     expect(abbrevRuntime('experimental-runtime')).toBe('experimental-runtime');

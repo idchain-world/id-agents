@@ -8,10 +8,23 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { AgentManagerDb } from '../../src/agent-manager-db.js';
 import { resolveModelAlias } from '../../src/core/model-aliases.js';
 
 describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
+  it('selects Neon for a model-less Antigravity agent under a Claude manager default', () => {
+    const manager = Object.create(AgentManagerDb.prototype);
+    manager.defaultConfig = { runtime: 'claude-code-cli', model: 'opus' };
+    expect(manager.defaultModelForAgent('antigravity-cli')).toBe('neon');
+    const env = manager.buildLocalAgentEnv('team', 4101, {
+      runtime: 'antigravity', metadata: { effort: 'low', dangerouslySkipPermissions: false },
+    }, 'neon');
+    expect(env).toMatchObject({ ID_HARNESS: 'antigravity-cli', CLAUDE_MODEL: 'gemini-4-neon-high',
+      ID_AGENT_EFFORT: 'low', ID_AGENT_SKIP_PERMISSIONS: 'false' });
+  });
+
   it('resolves short aliases to canonical model ids', () => {
+    expect(resolveModelAlias('NEON')).toBe('gemini-4-neon-high');
     expect(resolveModelAlias('fable')).toBe('claude-fable-5-2');
     expect(resolveModelAlias('haiku')).toBe('claude-haiku-4-5-20251001');
     expect(resolveModelAlias('opus-4.8')).toBe('claude-opus-4-8');

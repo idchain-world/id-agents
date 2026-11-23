@@ -15,6 +15,20 @@ import {
 } from '../../src/runtime/registry.js';
 
 describe('runtime registry', () => {
+  it('registers the Antigravity subscription profile', () => {
+    expect(getRuntimeProfile('antigravity')).toMatchObject({
+      id: 'antigravity-cli', providerName: 'Antigravity CLI', displayName: 'Antigravity',
+      defaultModel: 'neon', sessionPolicy: 'persistent', auth: { mode: 'cli-login', provider: 'Google' },
+      capabilities: { supportsResume: true, supportsPlugins: false, supportsAllowedTools: false },
+    });
+    for (const runtime of ['codex', 'cursor-cli', 'claude-code-cli', 'public-agent-remote']) {
+      expect(validateRuntimeModelCompatibility(runtime, 'neon')).toHaveLength(1);
+    }
+    for (const model of ['opus', 'astra', 'grok', 'composer-2']) {
+      expect(validateRuntimeModelCompatibility('antigravity', model)[0].message).toMatch(/routing .* through Antigravity is not enabled/i);
+    }
+  });
+
   it('returns the shared default runtime', () => {
     expect(getDefaultRuntime()).toBe('claude-agent-sdk');
   });

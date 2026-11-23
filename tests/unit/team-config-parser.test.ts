@@ -32,6 +32,15 @@ describe('team-config parser helpers', () => {
     }
   });
 
+  it('inherits the Antigravity runtime and effort from team YAML', () => {
+    tmpDir = mkTmp();
+    const file = path.join(tmpDir, 'team.yaml');
+    fs.writeFileSync(file, 'version: "1"\ndefaults: {runtime: antigravity, effort: low}\nagents: [{name: neon-agent}]\n');
+    const result = processConfig(file, tmpDir, []);
+    expect(result.errors).toEqual([]);
+    expect(result.agents[0]).toMatchObject({ runtime: 'antigravity', effort: 'low' });
+  });
+
   it('parses a foundry-demo style config with name and agent', () => {
     tmpDir = mkTmp();
     const configPath = path.join(tmpDir, 'configs', 'foundry-demo.yaml');

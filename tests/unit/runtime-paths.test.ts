@@ -39,8 +39,8 @@ describe('getRuntimePaths', () => {
     expect(rp.personalityFile).toBe('.claude/CLAUDE.md');
   });
 
-  it('returns Codex paths for codex runtime', () => {
-    const rp = getRuntimePaths('codex');
+  it.each(['codex', 'antigravity-cli', 'antigravity'])('returns .agents paths for %s', runtime => {
+    const rp = getRuntimePaths(runtime);
     expect(rp.templateDir).toBe('.agents');
     expect(rp.overlayTarget).toBe('.agents');
     expect(rp.skillsDir).toBe('.agents/skills');

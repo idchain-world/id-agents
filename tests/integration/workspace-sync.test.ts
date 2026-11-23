@@ -589,10 +589,10 @@ describe('workspace sync integration', () => {
     return configPath;
   };
 
-  it('maps a claude-native library onto the codex target (AGENTS.md + .agents/skills)', () => {
+  it.each(['codex', 'antigravity-cli', 'antigravity'])('maps a claude-native library onto the %s target (AGENTS.md + .agents/skills)', runtime => {
     workspacePath = mkTmp();
     const configDir = mkTmp();
-    const configPath = writeYaml(configDir, 'codex', workspacePath, 'foundry-dev');
+    const configPath = writeYaml(configDir, runtime, workspacePath, 'foundry-dev');
 
     try {
       const result = syncWorkspaceFromConfig({

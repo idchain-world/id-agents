@@ -6,6 +6,11 @@ import type { DeployConfig } from '../../src/config-parser.js';
 import { validateConfig } from '../../src/config-parser.js';
 
 describe('config runtime validation', () => {
+  it.each(['antigravity-cli', 'antigravity'] as const)('accepts %s in defaults and agent overrides', runtime => {
+    expect(validateConfig({ version: '1', defaults: { runtime, model: 'neon', effort: 'high' },
+      agents: [{ name: 'first' }, { name: 'second', runtime, effort: 'low' }] }).errors).toEqual([]);
+  });
+
   it('rejects Codex runtime with a Claude default model', () => {
     const config: DeployConfig = {
       version: '1',
