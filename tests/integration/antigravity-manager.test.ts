@@ -18,7 +18,7 @@ async function unusedPort(): Promise<number> {
   return port;
 }
 
-it('boots a CLI-created worker and round-trips Antigravity through the manager', async () => {
+it('boots a manager-created worker and round-trips Antigravity through the manager', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'agy-manager-'));
   const name = 'agy-' + Date.now();
   const binary = path.join(dir, 'agy');
@@ -58,7 +58,8 @@ else console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',respons
       path.resolve('dist/interactive-agent-cli.js'), 'spawn', ...args,
     ], { env: { ...process.env, MANAGER_URL: url, ID_TEAM: 'agy-test' } });
     const team = await db.teams.getOrCreateTeamId('agy-test');
-    await cli([name, '--runtime', 'antigravity']);
+    const worker = await post('/agents/spawn', { name, runtime: 'antigravity', model: 'hydrogen', effort: 'low' });
+    expect((await remote('/agent ' + worker.id + ' start')).ok).toBe(true);
     const row = (await db.agents.list(team)).find(a => a.name === name)!;
     pid = Number(row.metadata?.pid);
     await vi.waitFor(async () => expect((await fetch(row.endpoint + '/catalog')).ok).toBe(true), { timeout: 10000 });
@@ -70,7 +71,8 @@ else console.log(JSON.stringify({event:'result',result:{status:'SUCCESS',respons
       const query = await db.queries.getById(row.id, query_id);
       expect(query?.status).toBe('completed');
       expect(query?.result?.usage).toEqual({ input_tokens: 3, output_tokens: 2, total_tokens: 5 });
-      expect(JSON.parse(String(query?.result?.result))).toEqual({ runtime: 'antigravity-cli', model: 'gemini-4-neon-high', manager: url });
+      expect(query?.result?.model).toBe('gemini-4-hydrogen-low');
+      expect(JSON.parse(String(query?.result?.result))).toEqual({ runtime: 'antigravity-cli', model: query?.result?.model, manager: url });
     }, { timeout: 10000 });
     expect(readFileSync(log, 'utf8')).toContain('[Query ' + query_id + '] usage=');
 

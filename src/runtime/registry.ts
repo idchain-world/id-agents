@@ -308,18 +308,19 @@ export function validateRuntimeModelCompatibility(
   // Cursor serves models across provider families, including Gemini.
   if (resolvedRuntime === 'cursor-cli') return issues;
 
-  if (resolvedRuntime === 'antigravity-cli' && family !== 'gemini') {
-    return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a Gemini model or an Antigravity model alias.` }];
-  }
   if (resolvedRuntime === 'antigravity-cli') {
     const slug = resolveModelAlias(model.trim()).toLowerCase();
-    const familyMatch = /^gemini-4-(neon|carbon|argon|hydrogen)(?:-(.*))?$/.exec(slug);
+    const familyMatch = /^(?:gemini-4-)?(neon|carbon|argon|hydrogen)(?:-(.*))?$/.exec(slug);
     if (familyMatch) {
       const allowed = ['low', 'medium', 'high'];
       if (['neon', 'hydrogen'].includes(familyMatch[1])) allowed.push('xhigh');
       if (!allowed.includes(familyMatch[2]) || (effort && !allowed.includes(effort))) {
         return [{ code: 'invalid_model_effort', message: `${slug} requires an effort suffix supported by ${familyMatch[1]}: ${allowed.join(', ')}` }];
       }
+    } else if (/^(?:gemini-pro-)?orchestrator-/.test(slug) && family !== 'gemini') {
+      return [{ code: 'invalid_model_effort', message: 'Orchestrator has no effort levels. Use orchestrator, orchestrator-neon, orchestrator-carbon, or orchestrator-argon.' }];
+    } else if (family !== 'gemini') {
+      return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a Gemini model or an Antigravity model alias.` }];
     } else if (effort) {
       return [{ code: 'invalid_model_effort', message: `${slug} does not support an effort override` }];
     }

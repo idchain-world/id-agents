@@ -111,9 +111,10 @@ export class AntigravityCliHarness implements AgentHarness {
     const dir = prepareAntigravityDirectory(env);
     const skip = env.ID_AGENT_SKIP_PERMISSIONS !== 'false';
     const args = buildAntigravityArgs(prompt, options, dir, skip);
+    const model = args[args.indexOf('--model') + 1];
     const cwd = options.workingDirectory;
     this.version ??= spawnSync(binary, ['--version'], { cwd, env, encoding: 'utf8', timeout: 5000 }).stdout?.trim() || binary;
-    console.log(`[Antigravity] ${this.version}, model=${args[3]}, permissions=${skip ? 'always-proceed' : 'accept-edits'}`);
+    console.log(`[Antigravity] ${this.version}, model=${model}, permissions=${skip ? 'always-proceed' : 'accept-edits'}`);
     const proc = spawn(binary, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let diagnostic = '';
     proc.stderr.setEncoding('utf8').on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-4096); });
@@ -154,7 +155,7 @@ export class AntigravityCliHarness implements AgentHarness {
         } finally {
           timer.abort();
         }
-        yield terminal;
+        yield terminal.type === 'result' ? { ...terminal, model } : terminal;
         return;
       }
       const exit = await completion;

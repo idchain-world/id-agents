@@ -1719,6 +1719,7 @@ What would you like to do with this information?`;
 
     try {
       let result = '';
+      let resultModel = this.model;
       let usage: Record<string, number> | undefined;
       const messages: string[] = [];
 
@@ -1825,6 +1826,7 @@ ${prompt}`
         // Capture final result (do not require truthy; empty-string would otherwise get dropped).
         // Also handle structured results (arrays/objects) by stringifying them.
         if ('result' in message) {
+          resultModel = message.model || this.model;
           const r = (message as any).result;
           if (typeof r === 'string') result = r;
           else if (r !== undefined && r !== null) result = JSON.stringify(r);
@@ -1862,7 +1864,7 @@ ${prompt}`
         result,
         sessionId,
         messages,
-        model: this.model,
+        model: resultModel,
         ...(usage && { usage }),
       };
       await this.dbUpsertQuery({ ...query, sessionId });

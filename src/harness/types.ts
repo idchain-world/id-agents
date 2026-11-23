@@ -53,6 +53,7 @@ export interface HarnessMessage {
   subtype?: string;
   content?: string;
   result?: string;
+  model?: string;
   session_id?: string;
   tool_name?: string;
   parent_tool_use_id?: string;

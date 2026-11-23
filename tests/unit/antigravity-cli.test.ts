@@ -94,6 +94,11 @@ it.each(['carbon', 'argon', 'gemini-4-carbon-xhigh', 'orchestrator'])('rejects u
   expect(() => buildAntigravityArgs('test', { model, effort: 'xhigh' }, '/dir', false)).toThrow(/effort/);
 });
 
+it('lists supported efforts for an invalid family pin', () => {
+  expect(() => buildAntigravityArgs('test', { model: 'carbon-xhigh' }, '/dir', false))
+    .toThrow(/supported by carbon: low, medium, high$/);
+});
+
 it.each(['authentication required', 'Error: Please sign in to view available models.'])('explains host sign-in for %s', async error => {
   const result = JSON.stringify({ event: 'result', result: { status: 'ERROR', error } });
   for (const output of [error, result]) {
