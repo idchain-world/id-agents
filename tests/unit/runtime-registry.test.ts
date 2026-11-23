@@ -21,12 +21,16 @@ describe('runtime registry', () => {
       defaultModel: 'neon', sessionPolicy: 'persistent', auth: { mode: 'cli-login', provider: 'Google' },
       capabilities: { supportsResume: true, supportsPlugins: false, supportsAllowedTools: false },
     });
-    for (const runtime of ['codex', 'cursor-cli', 'claude-code-cli', 'public-agent-remote']) {
+    for (const runtime of ['codex', 'claude-code-cli', 'public-agent-remote']) {
       expect(validateRuntimeModelCompatibility(runtime, 'neon')).toHaveLength(1);
     }
     for (const model of ['opus', 'astra', 'grok', 'composer-2']) {
       expect(validateRuntimeModelCompatibility('antigravity', model)[0].message).toMatch(/routing .* through Antigravity is not enabled/i);
     }
+  });
+
+  it('allows Gemini model IDs on Cursor', () => {
+    expect(validateRuntimeModelCompatibility('cursor-cli', 'gemini-3-pro')).toEqual([]);
   });
 
   it('returns the shared default runtime', () => {

@@ -304,16 +304,15 @@ export function validateRuntimeModelCompatibility(
   const family = classifyModelFamily(model);
   const issues: RuntimeValidationIssue[] = [];
 
+  // Cursor serves models across provider families, including Gemini.
+  if (resolvedRuntime === 'cursor-cli') return issues;
+
   if (resolvedRuntime === 'antigravity-cli' && family !== 'gemini') {
     return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a gemini-* model or neon alias.` }];
   }
   if (resolvedRuntime !== 'antigravity-cli' && family === 'gemini') {
     return [{ code: 'runtime_model_mismatch', message: `Gemini model "${model}" requires runtime "antigravity-cli"` }];
   }
-
-  // Cursor Agent CLI supports both Claude-family (sonnet-4, sonnet-4-thinking)
-  // and OpenAI-family (gpt-5, ...) models, so skip cross-family checks for it.
-  if (resolvedRuntime === 'cursor-cli') return issues;
 
   if (family === 'cursor') {
     issues.push({
