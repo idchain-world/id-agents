@@ -1209,7 +1209,14 @@ export class AgentManagerDb {
   }
 
   private async dbNextPort(_teamId?: string): Promise<number> {
-    return this.db.agents.nextPort();
+    const next = await this.db.agents.nextPort();
+    const raw = process.env.ID_AGENT_PORT_BASE;
+    if (raw === undefined) return next;
+    const base = Number(raw);
+    if (!Number.isInteger(base) || base < 1 || base > 65535) {
+      throw new Error('ID_AGENT_PORT_BASE must be a port between 1 and 65535');
+    }
+    return Math.max(base, next);
   }
 
   /**
@@ -7648,6 +7655,8 @@ export class AgentManagerDb {
       });
 
       this.httpServer.listen(port, '127.0.0.1', async () => {
+        const address = this.httpServer?.address();
+        if (address && typeof address !== 'string') this.managementPort = address.port;
         console.log(`\n🚀 ID Agent Manager (DB-backed)`);
         console.log(`===============================`);
         console.log(`Management API: http://localhost:${port}`);
@@ -8262,7 +8271,8 @@ export class AgentManagerDb {
       ...(agentRow?.runtime && { ID_HARNESS: resolveRuntime(agentRow.runtime) }),
       ID_TEAM: teamName,
       ID_AGENT_PORT: String(port),
-      MANAGER_URL: `http://127.0.0.1:4100`,
+      MANAGER_URL: `http://127.0.0.1:${this.managementPort}`,
+      ...(process.env.SQLITE_PATH && { SQLITE_PATH: path.resolve(process.env.SQLITE_PATH) }),
       ID_AGENT_SKIP_PERMISSIONS: skipPermissions ? 'true' : 'false',
       ...(model && { CLAUDE_MODEL: resolveModelAlias(model) }),
       ...(typeof effort === 'string' && { ID_AGENT_EFFORT: effort }),

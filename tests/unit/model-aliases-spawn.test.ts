@@ -6,7 +6,7 @@
 // for that bug fix is idempotency: a canonical full id must pass through
 // unchanged so re-resolving an already-resolved value is always safe.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AgentManagerDb } from '../../src/agent-manager-db.js';
 import { resolveModelAlias } from '../../src/core/model-aliases.js';
@@ -21,6 +21,24 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
     }, 'neon');
     expect(env).toMatchObject({ ID_HARNESS: 'antigravity-cli', CLAUDE_MODEL: 'gemini-4-neon-high',
       ID_AGENT_EFFORT: 'low', ID_AGENT_SKIP_PERMISSIONS: 'false' });
+  });
+
+  it('isolates the allocation floor, manager URL and child database', async () => {
+    const manager = Object.create(AgentManagerDb.prototype);
+    manager.managementPort = 5100;
+    manager.db = { agents: { nextPort: async () => 4101 } };
+    try {
+      vi.stubEnv('ID_AGENT_PORT_BASE', '5101');
+      vi.stubEnv('SQLITE_PATH', '/tmp/scratch.db');
+      expect(await manager.dbNextPort()).toBe(5101);
+      expect(manager.buildLocalAgentEnv('test', 5101, null)).toMatchObject({
+        MANAGER_URL: 'http://127.0.0.1:5100', SQLITE_PATH: '/tmp/scratch.db',
+      });
+      vi.stubEnv('ID_AGENT_PORT_BASE', 'bad');
+      await expect(manager.dbNextPort()).rejects.toThrow('ID_AGENT_PORT_BASE');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('resolves short aliases to canonical model ids', () => {
