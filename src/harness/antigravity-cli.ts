@@ -27,6 +27,8 @@ export function buildAntigravityArgs(prompt: string, options: HarnessOptions, di
 
 export async function* parseAntigravityStream(lines: AsyncIterable<string>, resume?: string): AsyncGenerator<HarnessMessage> {
   const tools = new Set<number>();
+  const responses = new Map<number, string>();
+  let completed: { index: number; text: string } | undefined;
   let session: string | undefined;
   for await (const line of lines) {
     let event;
@@ -41,12 +43,23 @@ export async function* parseAntigravityStream(lines: AsyncIterable<string>, resu
       yield { type: 'system', subtype: 'init', session_id: session };
     } else if (event.event === 'step_update') {
       const step = event.step_update;
+      // A later step establishes that the completed response was intermediate.
+      if (completed && step?.step_index > completed.index) {
+        if (completed.text) yield { type: 'progress', content: completed.text };
+        completed = undefined;
+      }
       if (step?.step_type === 'tool' && step.state === 'ACTIVE' && !tools.has(step.step_index)) {
         tools.add(step.step_index);
         yield { type: 'tool_use', tool_name: step.tool_name || step.tool_info?.name, input: step.tool_info?.parameters };
       }
-      if (step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta) {
-        yield { type: 'progress', content: step.text_delta };
+      if (step?.step_type === 'agent_response' && step.step_index !== completed?.index) {
+        const text = (responses.get(step.step_index) || '') + (step.text_delta || '');
+        if (step.state === 'DONE') {
+          completed = { index: step.step_index, text };
+          responses.delete(step.step_index);
+        } else {
+          responses.set(step.step_index, text);
+        }
       }
     } else if (event.event === 'result') {
       const result = event.result;
@@ -74,6 +87,7 @@ function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
 
 export class AntigravityCliHarness implements AgentHarness {
   readonly type = 'antigravity-cli';
+  private version?: string;
   private stop?: () => boolean;
 
   cancel(): boolean {
@@ -87,12 +101,13 @@ export class AntigravityCliHarness implements AgentHarness {
     const skip = env.ID_AGENT_SKIP_PERMISSIONS !== 'false';
     const args = buildAntigravityArgs(prompt, options, dir, skip);
     const cwd = options.workingDirectory;
-    const version = spawnSync(binary, ['--version'], { cwd, env, encoding: 'utf8', timeout: 5000 });
-    console.log(`[Antigravity] ${version.stdout?.trim() || binary}, model=${args[3]}, permissions=${skip ? 'always-proceed' : 'request-review'}`);
+    this.version ??= spawnSync(binary, ['--version'], { cwd, env, encoding: 'utf8', timeout: 5000 }).stdout?.trim() || binary;
+    console.log(`[Antigravity] ${this.version}, model=${args[3]}, permissions=${skip ? 'always-proceed' : 'request-review'}`);
     const proc = spawn(binary, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let diagnostic = '';
     proc.stderr.setEncoding('utf8').on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-4096); });
     proc.on('error', error => { diagnostic = error.message; });
+    const exited = new Promise<void>(resolve => proc.once('exit', () => resolve()));
     let closed = false;
     const completion = new Promise<number | string | null>(resolve => proc.once('close', (code, signal) => {
       closed = true;
@@ -114,20 +129,35 @@ export class AntigravityCliHarness implements AgentHarness {
     };
     this.stop = stop;
     const lines = createInterface({ input: proc.stdout, crlfDelay: Infinity });
+    let terminal: HarnessMessage | undefined;
     try {
-      let terminal: HarnessMessage | undefined;
       for await (const message of parseAntigravityStream(lines, options.resume)) {
         if (message.type === 'result' || message.type === 'error') terminal = message;
         else yield message;
       }
       proc.stdout.resume();
+      if (terminal) {
+        const timer = new AbortController();
+        try {
+          await Promise.race([exited, delay(10_000, undefined, { signal: timer.signal })]);
+        } finally {
+          timer.abort();
+        }
+        yield terminal;
+        return;
+      }
       const exit = await completion;
-      await escalation;
-      yield terminal || { type: 'error', content: `agy closed (${exit}) without a result event${diagnostic ? ': ' + diagnostic.trim() : ''}` };
+      yield { type: 'error', content: `agy closed (${exit}) without a result event${diagnostic ? ': ' + diagnostic.trim() : ''}` };
     } finally {
-      if (!closed) stop();
       lines.close();
-      await completion;
+      if (terminal) {
+        proc.stdout.destroy();
+        proc.stderr.destroy();
+        proc.unref();
+      } else {
+        if (!closed) stop();
+        await completion;
+      }
       await escalation;
       if (this.stop === stop) this.stop = undefined;
     }

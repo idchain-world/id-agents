@@ -31,7 +31,21 @@ it.each(['text', 'tool-read', 'resume', 'unknown-model', 'interrupted'])('parses
 
 it('does not turn progress into a reply when the result is missing', async () => {
   const progress = { event: 'step_update', step_update: { step_type: 'agent_response', text_delta: 'partial' } };
-  expect(await parse([JSON.stringify(progress)])).toEqual([{ type: 'progress', content: 'partial' }]);
+  expect(await parse([JSON.stringify(progress)])).toEqual([]);
+});
+
+it('emits completed intermediate steps once and leaves final text to the result', async () => {
+  const step = (index: number, state: string, text: string) => ({
+    event: 'step_update', step_update: { step_type: 'agent_response', step_index: index, state, text_delta: text },
+  });
+  const events = [
+    step(1, 'ACTIVE', 'Looking'), step(1, 'DONE', ' now'), step(1, 'DONE', ' now'),
+    step(2, 'ACTIVE', 'All'), step(2, 'DONE', ' done'),
+    { event: 'result', result: { status: 'SUCCESS', response: 'All done' } },
+  ];
+  expect(await parse([events.map(e => JSON.stringify(e)).join('\n')])).toMatchObject([
+    { type: 'progress', content: 'Looking now' }, { type: 'result', result: 'All done' },
+  ]);
 });
 
 it('ignores repeated ACTIVE tool events and rejects whitespace-only success', async () => {

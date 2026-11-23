@@ -22,7 +22,7 @@ afterEach(() => {
 
 function fake(source: string) {
   writeFileSync(join(dir, 'agy'), '#!/usr/bin/env node\n' +
-    "if (process.argv[2] === '--version') { console.log('1.5.15'); process.exit(0); }\n" + source, { mode: 0o755 });
+    "if (process.argv[2] === '--version') { require('node:fs').appendFileSync(require('node:path').join(__dirname, 'version-calls'), '1'); console.log('1.5.15'); process.exit(0); }\n" + source, { mode: 0o755 });
 }
 
 it('runs the fixture through the registered harness and resumes the reported session', async () => {
@@ -41,6 +41,7 @@ it('runs the fixture through the registered harness and resumes the reported ses
   expect(events.filter(e => e.type === 'tool_use')).toMatchObject([{ tool_name: 'read_file' }]);
   expect(events.at(-1)).toMatchObject({ type: 'result', result: 'secret-token-QZ41-7731\n', session_id: session });
   for await (const event of harness.run('--next', { workingDirectory: dir, env, resume: session })) events.push(event);
+  expect(readFileSync(join(dir, 'version-calls'), 'utf8')).toBe('1');
   expect(JSON.parse(readFileSync(join(dir, 'args'), 'utf8'))).toEqual([
     '--gemini_dir', join(dir, 'state'), '--model', 'gemini-4-neon-high', '--output-format', 'stream-json',
     '--conversation', session, '--dangerously-skip-permissions', '-p=--next',
@@ -53,6 +54,25 @@ it.each([0, 7])('reports missing result on exit %s', async code => {
   const events = [];
   for await (const event of run) events.push(event);
   expect(events).toMatchObject([{ type: 'error', content: expect.stringContaining('(' + code + ') without a result event: diagnostic') }]);
+});
+
+it('returns after agy exits while a child still holds stdout', async () => {
+  fake(`
+    const child = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], {
+      stdio: ['ignore', 'inherit', 'ignore'],
+    });
+    require('node:fs').writeFileSync('child.pid', String(child.pid));
+    child.unref();
+    console.log(JSON.stringify({ event: 'result', result: { status: 'SUCCESS', response: 'done' } }));
+  `);
+  try {
+    const events = [];
+    for await (const event of createHarness('antigravity-cli').run('prompt', { workingDirectory: dir })) events.push(event);
+    expect(events).toMatchObject([{ type: 'result', result: 'done' }]);
+    process.kill(Number(readFileSync(join(dir, 'child.pid'), 'utf8')), 0);
+  } finally {
+    try { process.kill(Number(readFileSync(join(dir, 'child.pid'), 'utf8')), 'SIGKILL'); } catch {}
+  }
 });
 
 it('kills a tool that ignores INT and TERM and outlives the CLI', async () => {
