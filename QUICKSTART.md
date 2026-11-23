@@ -22,6 +22,7 @@ Follow these steps to find or refresh your local `id-agents` checkout, then depl
   npm install -g @openai/codex
   codex login
   ```
+- **Antigravity CLI** (optional) — install `agy`, then run `agy` once in a terminal to sign in with Google. Set `runtime: antigravity-cli` and `model: neon` on the agent. Preflight checks the sign-in with `/usage`.
 - **Cursor Agent CLI** (optional) — only if you want Cursor agents:
   ```bash
   curl https://cursor.com/install -fsS | bash
@@ -34,9 +35,10 @@ ID Agents runs each agent as a background process with no interactive shell to a
 
 - `claude-code-cli` agents launch with `--dangerously-skip-permissions`
 - `codex` agents launch with `--dangerously-bypass-approvals-and-sandbox`
+- `antigravity-cli` agents launch with `--dangerously-skip-permissions`. Opting out selects request-review mode, which can still execute shell commands.
 - `cursor-cli` agents launch with `-f` (force-allow commands)
 
-You can opt out by setting `dangerouslySkipPermissions: false` in the YAML config (per agent or under `defaults`), but be warned: any tool-use prompt then has no way to be approved, and the agent will hang silently on the first one. If you're not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you.
+You can opt out by setting `dangerouslySkipPermissions: false` in the YAML config (per agent or under `defaults`), but be warned: any tool-use prompt then has no way to be approved, and a runtime that waits for approval can hang on the first one. If you're not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you.
 
 ## 0. Find or Refresh the Repo
 

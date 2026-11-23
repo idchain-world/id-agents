@@ -11,11 +11,11 @@
 
 **Version 0.1.110-beta**
 
-A Swarm OS for your agents. Run a swarm of AI coding agents from a single chat. Each agent is a real process with full tool access — **Claude Code CLI**, **OpenAI Codex**, **Cursor CLI**, or a mix. No UI needed. Connect from any terminal, Telegram, or SSH session.
+A Swarm OS for your agents. Run a swarm of AI coding agents from a single chat. Each agent is a real process with full tool access — **Claude Code CLI**, **OpenAI Codex**, **Cursor CLI**, **Antigravity CLI**, or a mix. No UI needed. Connect from any terminal, Telegram, or SSH session.
 
 ## Key Features
 
-- **Multiple runtimes** - Claude Code CLI, OpenAI Codex, and Cursor CLI — mix and match in the same team
+- **Multiple runtimes** - Claude Code CLI, OpenAI Codex, Cursor CLI, and Antigravity CLI — mix and match in the same team
 - **Public-agent support** - register any REST-AP service that publishes `/.well-known/restap.json` with `service_type: "public-agent"` into the `public` team via `/public add <domain>`. The id-agents manager handles manager-join registration, optional OWS wallet provisioning with SSH-delivered wallet identity files, heartbeat probes, and DMZ metadata. **[Juno](https://github.com/idchain-world/juno)** is the reference public-agent implementation we ship — capability-limited by design, safe to point at the internet — but any service that speaks the same protocol works
 - **Task system** - Create, assign, claim, and track tasks across agents (`/task` commands + `/tasks` REST API)
 - **Check-ins** - Auto-attached supervision watches on delegated tasks. Wakes the dispatcher on a configurable interval if the delegate may be stalled; auto-closes when the linked task hits `done`
@@ -81,12 +81,15 @@ A Swarm OS for your agents. Run a swarm of AI coding agents from a single chat. 
 - **Claude Code CLI** — install from [claude.ai/code](https://claude.ai/code) and run `claude login`
 - **Claude Pro or Max plan** (agents use your Claude Code subscription — no API key needed)
 - **OpenAI Codex CLI** (optional) — install from [github.com/openai/codex](https://github.com/openai/codex) and run `codex login`
+- **Antigravity CLI** (optional) — install `agy` and run it once in a terminal to sign in with Google. Select `runtime: antigravity-cli`.
 - **Cursor CLI** (optional) — install from [cursor.com](https://cursor.com) with `curl https://cursor.com/install -fsS | bash` and run `cursor-agent login` (or set `CURSOR_API_KEY`)
 - **[OWS CLI](https://github.com/open-wallet-standard/core)** (optional, for agent wallets)
 
 > **Important:** You must be logged into Claude Code CLI before starting ID Agents. Run `claude login` in your terminal and complete the authentication. If you use Claude Code in VS Code, you still need to log in via the terminal — open VS Code's integrated terminal and run `claude login` there.
 
-> **⚠️ Permissions:** ID Agents runs each agent as a background process. By default, `claude-code-cli` agents spawn with `--dangerously-skip-permissions`, `codex` agents spawn with `--dangerously-bypass-approvals-and-sandbox`, and `cursor-cli` agents spawn with `-f` (force-allow commands), because background processes have no shell to approve tool prompts. You can opt out per agent (or under `defaults`) with `dangerouslySkipPermissions: false`, but the agents will then hang silently on the first tool-use prompt. If you are not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you. See [QUICKSTART.md](./QUICKSTART.md#-permissions-notice--read-before-deploying) for the full notice.
+Antigravity uses `--dangerously-skip-permissions` by default. With `dangerouslySkipPermissions: false`, its request-review mode can still execute shell commands.
+
+> **⚠️ Permissions:** ID Agents runs each agent as a background process. By default, `claude-code-cli` agents spawn with `--dangerously-skip-permissions`, `codex` agents spawn with `--dangerously-bypass-approvals-and-sandbox`, and `cursor-cli` agents spawn with `-f` (force-allow commands), because background processes have no shell to approve tool prompts. You can opt out per agent (or under `defaults`) with `dangerouslySkipPermissions: false`, and a runtime that waits for tool approval can hang at its first prompt. If you are not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you. See [QUICKSTART.md](./QUICKSTART.md#-permissions-notice--read-before-deploying) for the full notice.
 
 ### Recommended: Let Claude set it up
 
@@ -166,6 +169,11 @@ Then deploy and talk to the team:
 See [QUICKSTART Step 4](./QUICKSTART.md) for the full detection commands.
 
 `/deploy` is create-only: it refuses a team that already holds agents. To change a running team, use the surgical commands — `/model <agent> <model>` to change a model, `/delete <agent>` to remove one — and `/diff <team> <config>` to inspect drift without changing anything. [`/sync` is REMOVED](docs/guides/sync-command.md); the database is the source of truth and a config file may no longer overwrite it. Use `/export <team> [path]` to write a config back out from the database.
+
+| Antigravity model alias | Gemini model |
+| --- | --- |
+| `neon`, `neon-4`, `neon4` | `gemini-4-neon-high` |
+| `neon-low`, `neon-medium`, `neon-high`, `neon-xhigh` | `gemini-4-neon-<effort>` |
 
 ### Connecting a Manager
 
@@ -616,6 +624,7 @@ Two file patterns are supported (checked in this order), and paths are **runtime
 | `claude-code-cli` | `.claude/agents/` | `.claude/CLAUDE.md` | `.claude/skills/` |
 | `claude-agent-sdk` | `.claude/agents/` | `.claude/CLAUDE.md` | `.claude/skills/` |
 | `codex` | `.agents/` | `AGENTS.md` (project root) | `.agents/skills/` |
+| `antigravity-cli` | `.agents/` | `AGENTS.md` (project root) | `.agents/skills/` |
 | `cursor-cli` | `.cursor/agents/` | `AGENTS.md` (project root) | `.cursor/skills/` |
 
 ```

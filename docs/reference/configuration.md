@@ -115,7 +115,7 @@ All configs should include `skills: [identity, inter-agent, catalog]` at minimum
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `runtime` | String | Default agent runtime (`claude-agent-sdk`, `claude-code-cli`, `claude-code-local`, `codex`, `cursor-cli`) |
+| `runtime` | String | Default agent runtime (`claude-agent-sdk`, `claude-code-cli`, `claude-code-local`, `codex`, `cursor-cli`, `antigravity-cli` or `antigravity`) |
 | `model` | String | Default LLM model |
 | `skills` | Array | Skills deployed to each agent (minimum: `[identity, inter-agent, catalog]`) |
 | `plugins` | Array | Optional plugins for agent runtimes that support them |
@@ -311,7 +311,7 @@ A receipt at `<workspace>/.id-agents/receipt.json` tracks ownership per managed 
 
 ## Skills Configuration
 
-Skills are instruction packages deployed at deploy time via `deploySkillsToAgent`. The target directory is runtime-aware: `.claude/skills/` for Claude agents, `.agents/skills/` for Codex agents, `.cursor/skills/` for Cursor (`cursor-cli`) agents. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
+Skills are instruction packages deployed at deploy time via `deploySkillsToAgent`. The target directory is runtime-aware: `.claude/skills/` for Claude agents, `.agents/skills/` for Codex and Antigravity agents, `.cursor/skills/` for Cursor (`cursor-cli`) agents. Each skill is a directory containing a `SKILL.md` file with YAML frontmatter.
 
 When both `defaults.skills` and agent-level `skills:` are present, the lists are merged and deduped. Agent-level `skills:` does not nest under `agent:` and does not replace the selected library entry.
 
@@ -392,6 +392,7 @@ ID Agents supports multiple LLM runtimes (harnesses):
 | `claude-code-cli` | Claude Code CLI | CLI-auth runtime with session support |
 | `claude-code-local` | Claude Code CLI local alias | Internal/local alias of `claude-code-cli` |
 | `codex` | Codex CLI | OpenAI's coding agent |
+| `antigravity-cli` (alias `antigravity`) | Antigravity CLI | Google subscription sign-in. Default model `neon`. Gemini 4 supports `effort` values `low`, `medium`, `high` and `xhigh` where available. |
 | `cursor-cli` | Cursor Agent CLI | Non-interactive `cursor-agent` harness; install and auth per [Harnesses](./harnesses.md#cursor-cli-harness) (`curl https://cursor.com/install -fsS` then pipe to `bash`, `cursor-agent login`, or `CURSOR_API_KEY`) |
 
 ```yaml
@@ -532,6 +533,9 @@ Configuration can also be provided via environment variables:
 | `ANTHROPIC_API_KEY` | Anthropic API key (not needed with Claude Max plan) |
 | `CLAUDE_MODEL` | Default model override |
 | `OPENAI_API_KEY` | Optional API key for Codex when not using `codex login` |
+| `AGY_PATH` | Antigravity executable (default `agy` on PATH) |
+| `ID_AGY_GEMINI_DIR` | Shared Antigravity state root (default `~/.id-agents/antigravity`) |
+| `ID_AGY_USE_API_KEY` | Set to `true` with `GEMINI_API_KEY` to opt into Gemini API billing in the launching environment |
 | `CURSOR_API_KEY` | Optional API key for Cursor when not using `cursor-agent login` |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `ORCHESTRATOR_TYPE` | Agent runtime type |

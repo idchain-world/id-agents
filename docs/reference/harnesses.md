@@ -35,6 +35,7 @@ All harnesses produce `HarnessMessage` objects that map to REST-AP responses.
 | `claude-code-cli` | Claude Code CLI | Anthropic | Uses Max plan subscription |
 | `claude-code-local` | Claude Code CLI | Anthropic | Local alias of `claude-code-cli` used by some bootstrap paths |
 | `codex` | Codex CLI | OpenAI | CLI-auth runtime for Codex-based agent execution |
+| `antigravity-cli` | Antigravity CLI (`agy`) | Google | Subscription sign-in, Gemini models and persistent conversations |
 | `cursor-cli` | Cursor Agent CLI (`cursor-agent`) | Cursor | CLI-auth runtime; stream-json harness, session resume supported |
 
 ## Claude Agent SDK Harness
@@ -141,6 +142,16 @@ Codex currently runs each request as a fresh `codex exec` invocation. It does no
 
 ---
 
+## Antigravity CLI Harness
+
+Run `agy` once in a terminal to sign in. Choose `runtime: antigravity-cli` (alias `antigravity`) and `model: neon`. The default model resolves to `gemini-4-neon-high`. An explicit `effort` replaces the effort suffix on Gemini 4 models. Claude, GPT and Grok routing through this harness is disabled.
+
+Agents share `~/.id-agents/antigravity` for CLI configuration and conversations. Override the root with an absolute `ID_AGY_GEMINI_DIR`, or set `AGY_PATH` to select the executable. Preflight requires support for `--gemini_dir` and a successful `/usage` response. This directory isolates agents from personal Orca hooks. Subscription quota is shared across agents on the account.
+
+For API-key mode, set both `ID_AGY_USE_API_KEY=true` and `GEMINI_API_KEY` in the launching environment. The adapter sets `modelProvider` to `gemini` under the root’s `api-key/antigravity-cli/settings.json`. Each auth mode resumes conversations from its own directory.
+
+Agents read `AGENTS.md` and skills under `.agents/skills/`. By default the harness passes `--dangerously-skip-permissions`. Setting `dangerouslySkipPermissions: false` selects the CLI’s request-review mode, which can still run shell commands.
+
 ## Cursor CLI Harness
 
 Uses the **Cursor Agent CLI** (`cursor-agent`) as a harness. Install from [cursor.com](https://cursor.com):
@@ -190,7 +201,7 @@ interface AgentHarness {
   ): AsyncGenerator<HarnessMessage>;
 }
 
-type HarnessType = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-code-local' | 'codex' | 'cursor-cli';
+type HarnessType = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-code-local' | 'codex' | 'cursor-cli' | 'antigravity-cli';
 
 interface HarnessOptions {
   model?: string;
@@ -276,7 +287,7 @@ curl -X POST http://localhost:4100/remote \
 import { getAvailableHarnesses, isValidHarnessType } from './harness';
 
 const harnesses = getAvailableHarnesses();
-// ['claude-agent-sdk', 'claude-code-cli', 'claude-code-local', 'codex', 'cursor-cli']
+// ['claude-agent-sdk', 'claude-code-cli', 'claude-code-local', 'codex', 'cursor-cli', 'antigravity-cli']
 
 isValidHarnessType('claude-agent-sdk'); // true
 isValidHarnessType('invalid');          // false
