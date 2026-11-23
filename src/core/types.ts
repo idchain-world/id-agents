@@ -59,7 +59,7 @@ export interface AgentMetadata {
   // Maps to --dangerously-skip-permissions for claude-code-cli and to
   // --dangerously-bypass-approvals-and-sandbox for codex.
   dangerouslySkipPermissions?: boolean;
-  // Codex runtime only; maps to codex exec -c model_reasoning_effort=<value>.
+  // Codex reasoning effort or the effort suffix on a Gemini 4 model.
   effort?: 'low' | 'medium' | 'high' | 'xhigh';
   [key: string]: any;
 }

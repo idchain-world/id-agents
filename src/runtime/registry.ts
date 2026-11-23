@@ -12,8 +12,11 @@ import type { RuntimeProfile, RuntimeId, RuntimeValidationIssue } from './types.
 import { execFileSync, spawnSync } from 'child_process';
 import { resolveModelAlias } from '../core/model-aliases.js';
 
+import { checkAntigravityPreflight } from './antigravity.js';
+
 const DEFAULT_RUNTIME: RuntimeId = 'claude-agent-sdk';
 const RUNTIME_ALIASES: Record<string, RuntimeId> = {
+  antigravity: 'antigravity-cli',
   'codex-cli': 'codex',
 };
 
@@ -92,6 +95,24 @@ const PROFILES: Record<RuntimeId, RuntimeProfile> = {
       supportsResume: false,
       supportsPlugins: true,
       supportsAllowedTools: true,
+    },
+  },
+  'antigravity-cli': {
+    id: 'antigravity-cli',
+    canonicalId: 'antigravity-cli',
+    displayName: 'Antigravity',
+    providerName: 'Antigravity CLI',
+    defaultModel: 'neon',
+    sessionPolicy: 'persistent',
+    deploymentShape: 'local-process',
+    auth: {
+      mode: 'cli-login',
+      provider: 'Google',
+    },
+    capabilities: {
+      supportsResume: true,
+      supportsPlugins: false,
+      supportsAllowedTools: false,
     },
   },
   'cursor-cli': {
@@ -193,7 +214,7 @@ export interface RuntimePaths {
 
 export function getRuntimePaths(runtime: HarnessType | string | undefined): RuntimePaths {
   const resolved = resolveRuntime(runtime);
-  if (resolved === 'codex') {
+  if (resolved === 'codex' || resolved === 'antigravity-cli') {
     return {
       templateDir: '.agents',
       overlayTarget: '.agents',
@@ -248,9 +269,11 @@ export function isRemoteEndpointRuntime(runtime: string | undefined): boolean {
   return PROFILES[runtime as RuntimeId].deploymentShape === 'remote-endpoint';
 }
 
-function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'cursor' | 'unknown' {
+function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | 'cursor' | 'gemini' | 'unknown' {
   if (!model) return 'unknown';
   const normalized = resolveModelAlias(model.trim()).toLowerCase();
+
+  if (/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(normalized)) return 'gemini';
 
   // Grok 4.6 ids carry a `cursor-` prefix; 4.5 and 4.7 do not. Both are Cursor-served.
   if (normalized.startsWith('cursor-grok-') || normalized.startsWith('grok-')) return 'cursor';
@@ -280,6 +303,13 @@ export function validateRuntimeModelCompatibility(
   const resolvedRuntime = resolveRuntime(runtime);
   const family = classifyModelFamily(model);
   const issues: RuntimeValidationIssue[] = [];
+
+  if (resolvedRuntime === 'antigravity-cli' && family !== 'gemini') {
+    return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a gemini-* model or neon alias.` }];
+  }
+  if (resolvedRuntime !== 'antigravity-cli' && family === 'gemini') {
+    return [{ code: 'runtime_model_mismatch', message: `Gemini model "${model}" requires runtime "antigravity-cli"` }];
+  }
 
   // Cursor Agent CLI supports both Claude-family (sonnet-4, sonnet-4-thinking)
   // and OpenAI-family (gpt-5, ...) models, so skip cross-family checks for it.
@@ -350,6 +380,10 @@ export function validateRuntimePreflight(
   const issues: RuntimeValidationIssue[] = [
     ...validateRuntimeModelCompatibility(resolvedRuntime, model),
   ];
+
+  if (resolvedRuntime === 'antigravity-cli') {
+    return issues.length ? issues : checkAntigravityPreflight();
+  }
 
   if (resolvedRuntime === 'claude-agent-sdk') {
     if (!process.env.ANTHROPIC_API_KEY) {

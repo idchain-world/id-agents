@@ -6,7 +6,7 @@
  * All harnesses produce the same message format for REST-AP compatibility.
  */
 
-export type HarnessType = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-code-local' | 'codex' | 'cursor-cli' | 'public-agent-remote';
+export type HarnessType = 'claude-agent-sdk' | 'claude-code-cli' | 'claude-code-local' | 'codex' | 'antigravity-cli' | 'cursor-cli' | 'public-agent-remote';
 export type CodexReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
 
 export const CODEX_REASONING_EFFORTS = ['low', 'medium', 'high', 'xhigh'] as const;
@@ -20,6 +20,7 @@ export const HARNESS_TYPES = [
   'claude-code-cli',
   'claude-code-local',
   'codex',
+  'antigravity-cli',
   'cursor-cli',
   'public-agent-remote',
 ] as const;

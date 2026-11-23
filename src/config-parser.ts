@@ -10,7 +10,7 @@ import yaml from 'js-yaml';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { HarnessType, isValidHarnessType, getAvailableHarnesses } from './harness/index.js';
+import { HarnessType, getAvailableHarnesses } from './harness/index.js';
 import { CODEX_REASONING_EFFORTS, type CodexReasoningEffort, isCodexReasoningEffort } from './harness/types.js';
 import {
   getDefaultRuntime,
@@ -78,11 +78,11 @@ export interface AgentSpec {
   name: string;
   agent?: string;                     // Library agent overlay name (resolves to <library-root>/agents/<agent>/)
   type?: 'claude' | 'automator';      // Agent type: 'claude' (default) or 'automator' (team-local planning worker, hidden)
-  runtime?: HarnessType | 'codex-cli'; // Runtime harness id, defaults to 'claude-agent-sdk'
+  runtime?: HarnessType | 'codex-cli' | 'antigravity'; // Runtime harness id, defaults to 'claude-agent-sdk'
   openMode?: boolean;                 // Allow XMTP messages from any sender when no allowlist is configured
   description?: string;
   model?: string;
-  effort?: CodexReasoningEffort;       // Codex runtime only: model_reasoning_effort
+  effort?: CodexReasoningEffort;       // Codex reasoning effort or Gemini 4 effort suffix
   systemPrompt?: string;              // Custom system prompt for the agent
   roleBody?: string;                  // Agent role content from .claude/agents/<name>.md (set by processConfig)
   plugins?: PluginConfig[];           // Skill plugins
@@ -189,9 +189,9 @@ export interface DeployConfig {
   org?: OrgConfig;                      // Organization chart
   calendar?: CalendarSpec[];            // Team calendar schedules
   defaults?: {
-    runtime?: HarnessType;              // Default harness for all agents
+    runtime?: AgentSpec['runtime'];     // Default harness for all agents
     model?: string;
-    effort?: CodexReasoningEffort;      // Default Codex reasoning effort
+    effort?: CodexReasoningEffort;      // Default reasoning effort
     plugins?: PluginConfig[];           // Skill plugins
     skills?: string[];                  // Default skills for all agents
     allowedTools?: string[];
@@ -605,10 +605,10 @@ export function validateConfig(config: DeployConfig): ValidationResult {
     }
 
     // Validate runtime
-    if (agent.runtime && !isSupportedRuntimeSpecifier(agent.runtime) && !isValidHarnessType(agent.runtime)) {
+    if (agent.runtime && !isSupportedRuntimeSpecifier(agent.runtime)) {
       errors.push({
         path: `${agentPath}.runtime`,
-        message: `runtime must be one of: ${getAvailableHarnesses().join(', ')}, codex-cli`
+        message: `runtime must be one of: ${getAvailableHarnesses().join(', ')}, codex-cli, antigravity`
       });
     }
 
@@ -620,10 +620,10 @@ export function validateConfig(config: DeployConfig): ValidationResult {
           path: `${agentPath}.effort`,
           message: `effort must be one of: ${CODEX_REASONING_EFFORTS.join(', ')}`
         });
-      } else if (effectiveRuntime !== 'codex') {
+      } else if (effectiveRuntime !== 'codex' && effectiveRuntime !== 'antigravity-cli') {
         errors.push({
           path: `${agentPath}.effort`,
-          message: 'effort is only supported for runtime: codex'
+          message: 'effort is only supported for runtime: codex or antigravity-cli'
         });
       }
     }
@@ -667,10 +667,10 @@ export function validateConfig(config: DeployConfig): ValidationResult {
   // Validate defaults
   if (config.defaults) {
     // Validate defaults runtime
-    if (config.defaults.runtime && !isValidHarnessType(config.defaults.runtime)) {
+    if (config.defaults.runtime && !isSupportedRuntimeSpecifier(config.defaults.runtime)) {
       errors.push({
         path: 'defaults.runtime',
-        message: `runtime must be one of: ${getAvailableHarnesses().join(', ')}`
+        message: `runtime must be one of: ${getAvailableHarnesses().join(', ')}, codex-cli, antigravity`
       });
     }
 
@@ -687,10 +687,10 @@ export function validateConfig(config: DeployConfig): ValidationResult {
           path: 'defaults.effort',
           message: `effort must be one of: ${CODEX_REASONING_EFFORTS.join(', ')}`
         });
-      } else if (defaultRuntime !== 'codex') {
+      } else if (defaultRuntime !== 'codex' && defaultRuntime !== 'antigravity-cli') {
         errors.push({
           path: 'defaults.effort',
-          message: 'effort is only supported for runtime: codex'
+          message: 'effort is only supported for runtime: codex or antigravity-cli'
         });
       }
     }
@@ -1259,7 +1259,7 @@ export function mergeDefaults(agent: AgentSpec, defaults: DeployConfig['defaults
     merged.model = defaults.model;
   }
 
-  // Codex reasoning effort: agent overrides defaults
+  // Reasoning effort: agent overrides defaults
   if (!merged.effort && defaults.effort) {
     merged.effort = defaults.effort;
   }

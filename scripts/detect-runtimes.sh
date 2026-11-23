@@ -64,7 +64,10 @@ check_claude && claude_ready=true
 check_codex && codex_ready=true
 check_cursor && cursor_ready=true
 
-note_cursor() {
+note_optional_runtimes() {
+  if command -v "${AGY_PATH:-agy}" >/dev/null 2>&1; then
+    echo '# Antigravity CLI is installed. Run agy in a terminal to sign in and select runtime: antigravity-cli.'
+  fi
   if $cursor_ready; then
     echo "# Cursor Agent CLI is also available. Opt in per-agent with \`runtime: cursor-cli\`."
   fi
@@ -83,13 +86,13 @@ mixed
 #   ' configs/default.yaml > configs/default.yaml.new && \
 #   mv configs/default.yaml.new configs/default.yaml
 EOF
-  note_cursor
+  note_optional_runtimes
   exit 0
 fi
 
 if $claude_ready; then
   echo "as-is"
-  note_cursor
+  note_optional_runtimes
   exit 0
 fi
 
@@ -102,11 +105,11 @@ all-codex
 #   sed -i.bak 's/^  runtime: claude-code-cli$/  runtime: codex/' configs/default.yaml && \
 #   rm configs/default.yaml.bak
 EOF
-  note_cursor
+  note_optional_runtimes
   exit 0
 fi
 
 echo "abort"
 echo "Install and log in to at least one of Claude Code (claude login) or Codex (codex login) before deploying."
-note_cursor
+note_optional_runtimes
 exit 1

@@ -27,6 +27,19 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'fable': 'fable-5.2',
   'sonnet': 'sonn-5.5',
 
+  // Antigravity
+  'neon': 'neon-4 high',
+  'neon-4': 'neon-4 high',
+  'neon4': 'neon-4 high',
+  'neon-low': 'neon-4 low',
+  'neon-medium': 'neon-4 medium',
+  'neon-high': 'neon-4 high',
+  'neon-xhigh': 'neon-4 xhigh',
+  'gemini-4-neon-high': 'neon-4 high',
+  'gemini-4-neon-low': 'neon-4 low',
+  'gemini-4-neon-medium': 'neon-4 medium',
+  'gemini-4-neon-xhigh': 'neon-4 xhigh',
+
   // OpenAI Codex
   'gpt-6.2-astra': 'astra-6.2',
   'astra': 'astra-6.2',

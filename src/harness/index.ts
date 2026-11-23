@@ -12,6 +12,7 @@ import { ClaudeAgentSdkHarness } from './claude-agent-sdk.js';
 import { ClaudeCodeCliHarness } from './claude-code-cli.js';
 import { CodexHarness } from './codex.js';
 import { CursorCliHarness } from './cursor-cli.js';
+import { AntigravityCliHarness } from './antigravity-cli.js';
 import { getAvailableRuntimes, isRuntimeId } from '../runtime/registry.js';
 
 // Export all types
@@ -20,6 +21,7 @@ export { ClaudeAgentSdkHarness } from './claude-agent-sdk.js';
 export { ClaudeCodeCliHarness } from './claude-code-cli.js';
 export { CodexHarness } from './codex.js';
 export { CursorCliHarness } from './cursor-cli.js';
+export { AntigravityCliHarness } from './antigravity-cli.js';
 
 /**
  * Create a harness instance by type.
@@ -37,10 +39,12 @@ export function createHarness(type: HarnessType = 'claude-agent-sdk'): AgentHarn
       return new ClaudeCodeCliHarness();
     case 'codex':
       return new CodexHarness();
+    case 'antigravity-cli':
+      return new AntigravityCliHarness();
     case 'cursor-cli':
       return new CursorCliHarness();
     default:
-      throw new Error(`Unknown harness type: ${type}. Valid types: claude-agent-sdk, claude-code-cli, codex, cursor-cli`);
+      throw new Error(`Unknown harness type: ${type}. Valid types: claude-agent-sdk, claude-code-cli, codex, cursor-cli, antigravity-cli`);
   }
 }
 

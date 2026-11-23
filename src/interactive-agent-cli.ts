@@ -893,6 +893,9 @@ async function startLocalAgentProcess(agentData: any): Promise<{ success: boolea
       ID_TEAM: activeTeam,
       MANAGER_URL: MANAGER_URL,
       ...(sharedDir && { ID_SHARED_DIR: sharedDir }),
+      ...(agentData.runtime && { ID_HARNESS: resolveRuntime(agentData.runtime) }),
+      ...(agentData.metadata?.effort && { ID_AGENT_EFFORT: agentData.metadata.effort }),
+      ...(agentData.metadata?.dangerouslySkipPermissions === false && { ID_AGENT_SKIP_PERMISSIONS: 'false' }),
       ...(agentModel && { CLAUDE_MODEL: resolveModelAlias(agentModel) }),
       // Pass tokenId so agent knows its registry identity
       ...(agentTokenId && { ID_AGENT_TOKEN_ID: agentTokenId })
@@ -4443,6 +4446,8 @@ async function deployFromConfig(filePath: string, args: string[] = []) {
           const payload = {
             name: agent.name,
             model: agent.model,
+            effort: agent.effort,
+            dangerouslySkipPermissions: agent.dangerouslySkipPermissions,
             local: true,  // Local agent
             runtime: resolveRuntime(agent.runtime || 'claude-code-cli'),
             plugins: agent.plugins,
@@ -4517,6 +4522,7 @@ async function deployFromConfig(filePath: string, args: string[] = []) {
             ID_DB_TEAM_ID: result.teamId,
             ID_DB_AGENT_ID: result.id,
             ID_SHARED_DIR: result.sharedDirectory,
+            ...(agent.effort && { ID_AGENT_EFFORT: agent.effort }),
             ...(agent.model && { CLAUDE_MODEL: resolveModelAlias(agent.model) }),
             ...((agent.verbose === true || agent.verbose === 'true') && { ID_AGENT_VERBOSE: 'true' }),
             // Default to skip-permissions; honor explicit false from config
@@ -4569,6 +4575,8 @@ async function deployFromConfig(filePath: string, args: string[] = []) {
         type: agent.type,  // 'claude' (default) or 'automator'
         model: agent.model,
         runtime: agent.runtime,
+        effort: agent.effort,
+        dangerouslySkipPermissions: agent.dangerouslySkipPermissions,
         plugins: agent.plugins,
         allowedTools: agent.allowedTools,
         agent: agent.agent,  // Library overlay name (resolves configs/agents/<agent>/ into the runtime overlay target)

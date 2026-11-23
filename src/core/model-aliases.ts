@@ -30,6 +30,14 @@ export const MODEL_ALIASES: Record<string, string> = {
   'fable-5-2': 'claude-fable-5-2',
   'fable-5.1': 'claude-fable-5-1',
   'fable-5-1': 'claude-fable-5-1',
+  // Bare Neon tracks the latest version. Versioned aliases stay pinned.
+  'neon': 'gemini-4-neon-high',
+  'neon-4': 'gemini-4-neon-high',
+  'neon4': 'gemini-4-neon-high',
+  'neon-low': 'gemini-4-neon-low',
+  'neon-medium': 'gemini-4-neon-medium',
+  'neon-high': 'gemini-4-neon-high',
+  'neon-xhigh': 'gemini-4-neon-xhigh',
   // OpenAI Codex. Keep the requested short name distinct from the provider ID.
   'astra': 'gpt-6.2-astra',
   'astra-6.2': 'gpt-6.2-astra',

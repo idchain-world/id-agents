@@ -108,7 +108,7 @@ import {
   getDefaultRuntime,
   getRuntimePaths,
   isRemoteEndpointRuntime,
-  isRuntimeId,
+  isSupportedRuntimeSpecifier,
   resolveRuntime,
   runtimeIssueHint,
   validateRuntimePreflight,
@@ -519,6 +519,12 @@ export class AgentManagerDb {
     return getDefaultModelForRuntime(getDefaultRuntime(), this.defaultConfig?.model);
   }
 
+  private defaultModelForAgent(runtime: HarnessType): string {
+    // A global Claude default must not override the Antigravity profile on a model-less spawn.
+    const inherit = runtime !== 'antigravity-cli' || resolveRuntime(this.defaultConfig?.runtime) === runtime;
+    return getDefaultModelForRuntime(runtime, inherit ? this.defaultConfig?.model : undefined);
+  }
+
   private ensureRuntimeReady(runtime: HarnessType | string | undefined, model?: string): void {
     const issues = validateRuntimePreflight(runtime, model);
     if (issues.length > 0) {
@@ -563,7 +569,7 @@ export class AgentManagerDb {
 
     const summarizedAgents = agents.map((agentConfig, index) => {
       const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
-      const effectiveModel = agentConfig.model || getDefaultModelForRuntime(effectiveRuntime, this.defaultConfig?.model);
+      const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
       this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
 
       const previewId = `preview_${Date.now()}_${index}`;
@@ -3050,7 +3056,7 @@ export class AgentManagerDb {
         // Note: Duplicate names are allowed - agents are uniquely identified by their token ID (e.g., agent.42)
 
         // Runtime defaults to the shared runtime registry default
-        if (runtime !== undefined && !isRuntimeId(runtime)) {
+        if (runtime !== undefined && !isSupportedRuntimeSpecifier(runtime)) {
           return res.status(400).json({
             error: `Unknown runtime "${runtime}". Expected one of: ${getAvailableRuntimes().join(', ')}`
           });
@@ -3072,9 +3078,9 @@ export class AgentManagerDb {
               error: `effort must be one of: low, medium, high, xhigh`
             });
           }
-          if (effectiveRuntime !== 'codex') {
+          if (effectiveRuntime !== 'codex' && effectiveRuntime !== 'antigravity-cli') {
             return res.status(400).json({
-              error: 'effort is only supported for runtime: codex'
+              error: 'effort is only supported for runtime: codex or antigravity-cli'
             });
           }
           reasoningEffort = effort;
@@ -3114,7 +3120,7 @@ export class AgentManagerDb {
         ];
 
         // Use default model from config if not specified
-        const effectiveModel = model || getDefaultModelForRuntime(effectiveRuntime, this.defaultConfig?.model);
+        const effectiveModel = model || this.defaultModelForAgent(effectiveRuntime);
         this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
 
         // Create workspace directory first (needed for plugin copy)
@@ -6190,7 +6196,7 @@ export class AgentManagerDb {
 
         for (const agentConfig of agents) {
           const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
-          const effectiveModel = agentConfig.model || getDefaultModelForRuntime(effectiveRuntime, this.defaultConfig?.model);
+          const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
           this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
         }
 
@@ -6254,7 +6260,7 @@ export class AgentManagerDb {
 
             // Merge plugins from config
             const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
-            const effectiveModel = agentConfig.model || getDefaultModelForRuntime(effectiveRuntime, this.defaultConfig?.model);
+            const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
             this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
             const mergedPlugins = agentConfig.plugins || [];
 
@@ -8265,6 +8271,10 @@ export class AgentManagerDb {
       ...(catalogEnv && { ID_AGENT_CATALOG: catalogEnv }),
       ...(process.env.ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY }),
       ...(process.env.OPENAI_API_KEY && { OPENAI_API_KEY: process.env.OPENAI_API_KEY }),
+      ...(process.env.AGY_PATH && { AGY_PATH: process.env.AGY_PATH }),
+      ...(process.env.ID_AGY_GEMINI_DIR && { ID_AGY_GEMINI_DIR: process.env.ID_AGY_GEMINI_DIR }),
+      ...(process.env.ID_AGY_USE_API_KEY && { ID_AGY_USE_API_KEY: process.env.ID_AGY_USE_API_KEY }),
+      ...(resolveRuntime(agentRow?.runtime) === 'antigravity-cli' && process.env.GEMINI_API_KEY && { GEMINI_API_KEY: process.env.GEMINI_API_KEY }),
     };
   }
 

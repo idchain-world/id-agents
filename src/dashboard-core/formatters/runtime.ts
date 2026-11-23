@@ -6,6 +6,7 @@
 
 export const RUNTIME_ABBREVIATIONS: Record<string, string> = {
   'claude-code-cli': 'claude',
+  'antigravity-cli': 'antigravity',
   'cursor-cli': 'cursor',
   codex: 'codex',
 };

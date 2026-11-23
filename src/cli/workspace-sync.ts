@@ -76,7 +76,7 @@ function classifyRuntime(runtime: AgentSpec['runtime']): RuntimeClass | null {
   if (resolved === 'claude-agent-sdk' || resolved === 'claude-code-cli' || resolved === 'claude-code-local') {
     return 'claude';
   }
-  if (resolved === 'codex') return 'codex';
+  if (resolved === 'codex' || resolved === 'antigravity-cli') return 'codex';
   if (resolved === 'cursor-cli') return 'cursor';
   return null;
 }
