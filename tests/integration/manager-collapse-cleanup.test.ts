@@ -142,6 +142,19 @@ describe('manager registration cleanup', () => {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
+  it('stores a self-reported runtime and model and preserves the configured pair on re-registration', async () => {
+    const id = 'local_registration_test';
+    const register = (runtime: string, model: string) => fetch(baseUrl + '/agents/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, name: 'registration-test', endpoint: baseUrl, type: 'claude', runtime, model }),
+    });
+    expect((await register('antigravity-cli', 'hydrogen')).status).toBe(201);
+    expect(await db.agents.getById(id)).toMatchObject({ runtime: 'antigravity-cli', model: 'hydrogen' });
+    expect((await register('codex', 'astra')).status).toBe(201);
+    expect(await db.agents.getById(id)).toMatchObject({ runtime: 'antigravity-cli', model: 'hydrogen' });
+  });
+
   it('rejects interactive self-registration under the reserved manager name', async () => {
     const res = await fetch(`${baseUrl}/agents/register`, {
       method: 'POST',

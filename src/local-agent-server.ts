@@ -86,7 +86,8 @@ async function registerWithManager(
   name: string,
   team: string,
   port: number,
-  runtime: string
+  runtime: string,
+  model: string
 ): Promise<void> {
   const endpoint = `http://localhost:${port}`;
 
@@ -102,7 +103,9 @@ async function registerWithManager(
       id: agentId,
       name,
       endpoint,
-      type: 'claude',  // Mark as claude type since it runs Claude Code
+      type: 'claude',
+      runtime,
+      model,
       metadata: {
         name,
         service_type: 'REST-AP',
@@ -207,6 +210,7 @@ export async function startLocalAgent(config: LocalAgentConfig): Promise<{
         name,
         type: 'claude',
         model,
+        runtime,
         port,
         endpoint: `http://localhost:${port}`,
         working_directory: workingDirectory,
@@ -277,7 +281,7 @@ export async function startLocalAgent(config: LocalAgentConfig): Promise<{
   // Register with manager (only if not pre-registered)
   if (!isPreRegistered) {
     try {
-      await registerWithManager(managerUrl, agentId, name, team, port, runtime);
+      await registerWithManager(managerUrl, agentId, name, team, port, runtime, model);
     } catch (err) {
       console.warn(`⚠️  Could not register with manager: ${err}`);
       console.log(`   Agent is running but may not be discoverable by other agents.`);

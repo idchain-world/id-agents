@@ -3430,7 +3430,7 @@ export class AgentManagerDb {
         });
       }
 
-      const { id: requestedIdRaw, name, endpoint, metadata, type: requestedTypeRaw } = req.body || {};
+      const { id: requestedIdRaw, name, endpoint, metadata, runtime, model, type: requestedTypeRaw } = req.body || {};
       if (!name || !endpoint) return res.status(400).json({ error: 'Missing name or endpoint' });
       const regNameCheck = validateName(name, 'agent');
       if (!regNameCheck.valid) return res.status(400).json({ error: regNameCheck.error });
@@ -3476,6 +3476,7 @@ export class AgentManagerDb {
         service_type: (metadata && metadata.service_type) || 'REST-AP',
         endpoint,
         ...(metadata || {}),
+        ...(priorRow?.runtime && metadata?.runtime && { runtime: priorRow.runtime }),
         ...(typeof (priorMeta as { pid?: unknown }).pid === 'number'
           ? { pid: (priorMeta as { pid: number }).pid }
           : {}),
@@ -3489,7 +3490,8 @@ export class AgentManagerDb {
         id,
         name,
         type,
-        model: 'external',
+        runtime: isSupportedRuntimeSpecifier(runtime) ? resolveRuntime(runtime) : undefined,
+        model: typeof model === 'string' && model ? model : 'external',
         port: 0,
         endpoint,
         working_directory: '',

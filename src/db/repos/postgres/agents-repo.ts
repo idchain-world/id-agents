@@ -286,8 +286,8 @@ export class PgAgentsRepo implements AgentsRepository {
   ): Promise<void> {
     await this.db.query(
       `INSERT INTO agents (team_id, id, name, type, model, port, endpoint, working_directory, status, created_at, metadata, token_id, domain,
-          customer_domain, public_endpoint_url, internal_endpoint_url, ssh_target)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+          customer_domain, public_endpoint_url, internal_endpoint_url, ssh_target, runtime)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        ON CONFLICT (id)
        DO UPDATE SET name                 = EXCLUDED.name,
                      type                 = EXCLUDED.type,
@@ -315,6 +315,7 @@ export class PgAgentsRepo implements AgentsRepository {
         agent.public_endpoint_url ?? null,
         agent.internal_endpoint_url ?? null,
         agent.ssh_target ?? null,
+        agent.runtime ?? 'claude-agent-sdk',
       ],
     );
   }
