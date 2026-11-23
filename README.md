@@ -85,9 +85,9 @@ A Swarm OS for your agents. Run a swarm of AI coding agents from a single chat. 
 - **Cursor CLI** (optional) — install from [cursor.com](https://cursor.com) with `curl https://cursor.com/install -fsS | bash` and run `cursor-agent login` (or set `CURSOR_API_KEY`)
 - **[OWS CLI](https://github.com/open-wallet-standard/core)** (optional, for agent wallets)
 
-> **Important:** You must be logged into Claude Code CLI before starting ID Agents. Run `claude login` in your terminal and complete the authentication. If you use Claude Code in VS Code, you still need to log in via the terminal — open VS Code's integrated terminal and run `claude login` there.
+> **Important:** Teams that use the Claude Code CLI require a Claude login. Run `claude login` in your terminal and complete the authentication. If you use Claude Code in VS Code, you still need to log in via the terminal — open VS Code's integrated terminal and run `claude login` there.
 
-Antigravity uses `--dangerously-skip-permissions` by default. With `dangerouslySkipPermissions: false`, its request-review mode can still execute shell commands.
+Antigravity uses `--dangerously-skip-permissions` by default. With `dangerouslySkipPermissions: false`, the harness passes `--mode accept-edits`.
 
 > **⚠️ Permissions:** ID Agents runs each agent as a background process. By default, `claude-code-cli` agents spawn with `--dangerously-skip-permissions`, `codex` agents spawn with `--dangerously-bypass-approvals-and-sandbox`, and `cursor-cli` agents spawn with `-f` (force-allow commands), because background processes have no shell to approve tool prompts. You can opt out per agent (or under `defaults`) with `dangerouslySkipPermissions: false`, and a runtime that waits for tool approval can hang at its first prompt. If you are not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you. See [QUICKSTART.md](./QUICKSTART.md#-permissions-notice--read-before-deploying) for the full notice.
 
@@ -174,6 +174,16 @@ See [QUICKSTART Step 4](./QUICKSTART.md) for the full detection commands.
 | --- | --- |
 | `neon`, `neon-4`, `neon4` | `gemini-4-neon-high` |
 | `neon-low`, `neon-medium`, `neon-high`, `neon-xhigh` | `gemini-4-neon-<effort>` |
+| `carbon`, `argon`, `hydrogen` | `gemini-4-<family>-high` |
+| `carbon-<effort>`, `argon-<effort>` | Gemini 4 Low, Medium or High |
+| `hydrogen-<effort>` | Gemini 4 Low, Medium, High or XHigh |
+| `orchestrator`, `orchestrator-neon` | `gemini-pro-orchestrator-neon` |
+| `orchestrator-carbon` | `gemini-pro-orchestrator` |
+| `orchestrator-argon` | `gemini-pro-orchestrator-argon` |
+
+Add an agent to an existing team with `ID_TEAM=my-team id-agents spawn analyst carbon-high --runtime antigravity`. Omitting the model selects Neon High by default. An explicit `effort` overrides a supported Gemini 4 suffix. Orchestrator models take no effort setting. Completed Antigravity query records include the CLI’s counters under `result.usage`.
+
+For a secondary SQLite manager, unset `DATABASE_URL`, set `AGENT_MANAGER_PORT`, `SQLITE_PATH` and `ID_AGENT_PORT_BASE`, and point `AGENT_MANAGER_WORKDIR` and `ID_WORKSPACE_DIR` at the scratch workspace. Set `ID_AGY_GEMINI_DIR` to an absolute scratch directory for conversations and configuration. Manager-spawned workers append to `/tmp/<agent-name>.log` across instances.
 
 ### Connecting a Manager
 

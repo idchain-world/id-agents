@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.115-beta
+
+### Added — Antigravity CLI agents
+
+- Add a Gemini agent to a team with `id-agents spawn analyst --runtime antigravity`, the spawn API, or team YAML. Antigravity loads the agent persona from `AGENTS.md` and skills from `.agents/skills/`.
+- The quickstart and admin-control skill show how to add Antigravity agents to a running team through the CLI or spawn API.
+- Select Neon, Carbon, Argon, Hydrogen, or an Orchestrator model by alias. Spawn and model updates check runtime compatibility and supported effort levels.
+- Antigravity queries support persistent conversations, process-group cancellation and token usage in completed query results. Setting `dangerouslySkipPermissions: false` selects `--mode accept-edits`.
+
+### Fixed — secondary manager isolation
+
+- Hand-started local agents register their runtime and model with the manager. Re-registration preserves the runtime and model configured by the manager.
+- Manager-spawned workers use the launching manager’s port and explicit SQLite path. Set `ID_AGENT_PORT_BASE` to allocate worker ports in a separate range.
+
 ## 0.1.110-beta
 
 ### Changed — the database is the source of truth; `/sync` is removed

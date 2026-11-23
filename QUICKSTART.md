@@ -35,7 +35,7 @@ ID Agents runs each agent as a background process with no interactive shell to a
 
 - `claude-code-cli` agents launch with `--dangerously-skip-permissions`
 - `codex` agents launch with `--dangerously-bypass-approvals-and-sandbox`
-- `antigravity-cli` agents launch with `--dangerously-skip-permissions`. Opting out selects request-review mode, which can still execute shell commands.
+- `antigravity-cli` agents launch with `--dangerously-skip-permissions`. Setting `dangerouslySkipPermissions: false` passes `--mode accept-edits`.
 - `cursor-cli` agents launch with `-f` (force-allow commands)
 
 You can opt out by setting `dangerouslySkipPermissions: false` in the YAML config (per agent or under `defaults`), but be warned: any tool-use prompt then has no way to be approved, and a runtime that waits for approval can hang on the first one. If you're not comfortable giving background agents this level of autonomy, ID Agents is not the right tool for you.
