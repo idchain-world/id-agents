@@ -57,7 +57,7 @@ it('ignores repeated ACTIVE tool events and rejects whitespace-only success', as
 it('constructs isolated args, preserving a dash-prefixed multiline prompt', () => {
   expect(buildAntigravityArgs('--flag\nhello', { model: 'neon', effort: 'low', resume: 'previous' }, '/dir', false)).toEqual([
     '--gemini_dir', '/dir', '--model', 'gemini-4-neon-low', '--output-format', 'stream-json',
-    '--conversation', 'previous', '-p=--flag\nhello',
+    '--conversation', 'previous', '--mode', 'accept-edits', '-p=--flag\nhello',
   ]);
   expect(buildAntigravityArgs('hello', {}, '/dir', true).slice(-2)).toEqual(['--dangerously-skip-permissions', '-p=hello']);
   expect(() => buildAntigravityArgs('hello', { model: 'astra' }, '/dir', true)).toThrow(/not enabled/);
@@ -77,4 +77,26 @@ it('requires explicit key opt-in', () => {
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toEqual({ theme: 'blue', modelProvider: 'gemini' });
     expect(prepareAntigravityDirectory({ ID_AGY_GEMINI_DIR: root })).toBe(root);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+it.each([
+  ['carbon', 'gemini-4-carbon-high'], ['carbon-medium', 'gemini-4-carbon-medium'],
+  ['argon', 'gemini-4-argon-high'], ['argon-low', 'gemini-4-argon-low'],
+  ['hydrogen', 'gemini-4-hydrogen-high'], ['hydrogen-xhigh', 'gemini-4-hydrogen-xhigh'],
+  ['orchestrator', 'gemini-pro-orchestrator-neon'], ['orchestrator-neon', 'gemini-pro-orchestrator-neon'],
+  ['orchestrator-carbon', 'gemini-pro-orchestrator'], ['orchestrator-argon', 'gemini-pro-orchestrator-argon'],
+  ['gemini-3.8-flash-low', 'gemini-3.8-flash-low'],
+])('passes %s to agy as %s', (model, slug) => {
+  expect(buildAntigravityArgs('test', { model }, '/dir', true)[3]).toBe(slug);
+});
+
+it.each(['carbon', 'argon', 'gemini-4-carbon-xhigh', 'orchestrator'])('rejects unavailable effort on %s', model => {
+  expect(() => buildAntigravityArgs('test', { model, effort: 'xhigh' }, '/dir', false)).toThrow(/effort/);
+});
+
+it.each(['authentication required', 'Error: Please sign in to view available models.'])('explains host sign-in for %s', async error => {
+  const result = JSON.stringify({ event: 'result', result: { status: 'ERROR', error } });
+  for (const output of [error, result]) {
+    expect(await parse([output])).toMatchObject([{ type: 'error', content: expect.stringContaining('Run agy once in a terminal on the host') }]);
+  }
 });

@@ -23,7 +23,7 @@ const COLS = {
   marker: 2,
   name: 17,
   port: 6,
-  runtime: 8,
+  runtime: 12,
   model: 10, // abbreviated via util/models.ts (e.g. 'opus-4-7', 'sonn-4-6', 'comp-2')
   effort: 4,
   status: 4,
@@ -40,7 +40,7 @@ const REMOTE_COLS = {
   marker: 2,
   name: 17,
   port: 6,    // renders '—' but keeps same width
-  runtime: 8,
+  runtime: 12,
   model: 10,
   effort: 4,
   status: 4,

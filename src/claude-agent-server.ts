@@ -1719,6 +1719,7 @@ What would you like to do with this information?`;
 
     try {
       let result = '';
+      let usage: Record<string, number> | undefined;
       const messages: string[] = [];
 
       console.log(`${logTime()} [Agent] Processing query ${queryId}${from ? ` from ${from}` : ''}${options?.noAutoReply ? ' (no auto-reply)' : ''}: ${prompt.substring(0, 60)}...`);
@@ -1757,6 +1758,10 @@ ${prompt}`
         resume: allowSessionResume ? sessionId : undefined,
         plugins: plugins
       })) {
+        if (message.usage) {
+          usage = message.usage;
+          console.log(`[Query ${queryId}] usage=${JSON.stringify(usage)}`);
+        }
         // Capture session ID from system init or result message
         if (message.session_id) {
           sessionId = message.session_id;
@@ -1857,7 +1862,8 @@ ${prompt}`
         result,
         sessionId,
         messages,
-        model: this.model
+        model: this.model,
+        ...(usage && { usage }),
       };
       await this.dbUpsertQuery({ ...query, sessionId });
 

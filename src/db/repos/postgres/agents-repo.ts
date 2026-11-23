@@ -192,13 +192,13 @@ export class PgAgentsRepo implements AgentsRepository {
     return r.rows;
   }
 
-  async nextPort(): Promise<number> {
+  async nextPort(base = 4101): Promise<number> {
     const r = await this.db.query<{ max_port: number | null }>(
       `SELECT MAX(port) as max_port FROM agents
        WHERE deleted_at IS NULL AND type = 'claude' AND port > 0`,
     );
     const maxPort = r.rows[0]?.max_port ?? null;
-    return maxPort ? maxPort + 1 : 4101;
+    return Math.max(base, (maxPort ?? 0) + 1);
   }
 
   async count(teamId: string): Promise<string> {

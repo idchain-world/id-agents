@@ -98,7 +98,7 @@ import { closeLinkedCheckinsForTerminalTask } from './checkins/checkin-autoclose
 import type { CheckinRow } from './db/types.js';
 import { parseAgentRef, normalizeAlias, buildAmbiguityWarning, type AgentMatch } from './core/agent-identifier.js';
 import { resolveNewsTrigger } from './core/messaging-service.js';
-import { isCodexReasoningEffort, isHarnessType, CODEX_REASONING_EFFORTS, HARNESS_TYPES, type CodexReasoningEffort, type HarnessType } from './harness/types.js';
+import { isCodexReasoningEffort, CODEX_REASONING_EFFORTS, HARNESS_TYPES, type CodexReasoningEffort, type HarnessType } from './harness/types.js';
 import { SchedulerService, synthesizeForceHeartbeat } from './scheduling/scheduler-service.js';
 import type { DispatchTarget } from './scheduling/schedule-types.js';
 import { heartbeatToSchedule, heartbeatScheduleId, calendarToSchedule, validateIntervalSeconds, HEARTBEAT_GENERIC_MESSAGE } from './scheduling/schedule-config.js';
@@ -112,6 +112,7 @@ import {
   resolveRuntime,
   runtimeIssueHint,
   validateRuntimePreflight,
+  validateRuntimeModelCompatibility,
 } from './runtime/registry.js';
 
 // ES module equivalent of __dirname
@@ -525,8 +526,8 @@ export class AgentManagerDb {
     return getDefaultModelForRuntime(runtime, inherit ? this.defaultConfig?.model : undefined);
   }
 
-  private ensureRuntimeReady(runtime: HarnessType | string | undefined, model?: string): void {
-    const issues = validateRuntimePreflight(runtime, model);
+  private ensureRuntimeReady(runtime: HarnessType | string | undefined, model?: string, effort?: string): void {
+    const issues = validateRuntimePreflight(runtime, model, effort);
     if (issues.length > 0) {
       throw new Error(issues.map(issue => runtimeIssueHint(issue.code) || issue.message).join('; '));
     }
@@ -570,7 +571,7 @@ export class AgentManagerDb {
     const summarizedAgents = agents.map((agentConfig, index) => {
       const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
       const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
-      this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
+      this.ensureRuntimeReady(effectiveRuntime, effectiveModel, agentConfig.effort);
 
       const previewId = `preview_${Date.now()}_${index}`;
       const workingDirectory = agentConfig.workingDirectory && path.isAbsolute(agentConfig.workingDirectory)
@@ -1209,14 +1210,13 @@ export class AgentManagerDb {
   }
 
   private async dbNextPort(_teamId?: string): Promise<number> {
-    const next = await this.db.agents.nextPort();
     const raw = process.env.ID_AGENT_PORT_BASE;
-    if (raw === undefined) return next;
+    if (raw === undefined) return this.db.agents.nextPort();
     const base = Number(raw);
     if (!Number.isInteger(base) || base < 1 || base > 65535) {
       throw new Error('ID_AGENT_PORT_BASE must be a port between 1 and 65535');
     }
-    return Math.max(base, next);
+    return this.db.agents.nextPort(base);
   }
 
   /**
@@ -3128,7 +3128,7 @@ export class AgentManagerDb {
 
         // Use default model from config if not specified
         const effectiveModel = model || this.defaultModelForAgent(effectiveRuntime);
-        this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
+        this.ensureRuntimeReady(effectiveRuntime, effectiveModel, reasoningEffort);
 
         // Create workspace directory first (needed for plugin copy)
         mkdirSync(workingDirectory, { recursive: true });
@@ -3163,7 +3163,7 @@ export class AgentManagerDb {
         // Also runs when there are no skills but there IS org context, so the
         // context is not silently dropped for a skill-less spawn — deploy always
         // calls this, which is where the asymmetry came from.
-        if ((skills && Array.isArray(skills) && skills.length > 0) || spawnOrgContext) {
+        if (effectiveRuntime === 'antigravity-cli' || (skills && Array.isArray(skills) && skills.length > 0) || spawnOrgContext) {
           this.deploySkillsToAgent(workingDirectory, Array.isArray(skills) ? skills : [], {
             DISPLAY_NAME: domain || name,
             TEAM: teamName,
@@ -3650,7 +3650,7 @@ export class AgentManagerDb {
 
     this.managementApp.post('/agents/:id/model', async (req, res) => {
       const { id: teamId, name: teamName } = await this.getTeam(req);
-      const { model } = req.body;
+      const model = typeof req.body.model === 'string' ? resolveModelAlias(req.body.model) : undefined;
 
       if (!model) {
         return res.status(400).json({ error: 'Missing model in request body' });
@@ -3664,6 +3664,8 @@ export class AgentManagerDb {
       }
 
       try {
+        const [issue] = validateRuntimeModelCompatibility(agent.runtime, req.body.model, isCodexReasoningEffort(agent.metadata?.effort) ? agent.metadata.effort : undefined);
+        if (issue) return res.status(400).json({ error: issue.message });
         // Update model in database - agent needs restart to pick up new model
         await this.db.agents.updateStatus(agent.id, 'pending', { model });
 
@@ -6204,7 +6206,7 @@ export class AgentManagerDb {
         for (const agentConfig of agents) {
           const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
           const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
-          this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
+          this.ensureRuntimeReady(effectiveRuntime, effectiveModel, agentConfig.effort);
         }
 
         // Generate org chart if defined in config
@@ -6268,7 +6270,7 @@ export class AgentManagerDb {
             // Merge plugins from config
             const effectiveRuntime = resolveRuntime(agentConfig.runtime) as HarnessType;
             const effectiveModel = agentConfig.model || this.defaultModelForAgent(effectiveRuntime);
-            this.ensureRuntimeReady(effectiveRuntime, effectiveModel);
+            this.ensureRuntimeReady(effectiveRuntime, effectiveModel, agentConfig.effort);
             const mergedPlugins = agentConfig.plugins || [];
 
             // Copy plugins to agent's working directory
@@ -6520,7 +6522,8 @@ export class AgentManagerDb {
           return { ok: false, error: 'Usage: /agent <name> <start|stop|rebuild|logs|heartbeat|probe|wallet provision>' };
         }
 
-        const agent = await this.dbQueryAgentByNameMostRecent(teamId, agentName);
+        const agent = await this.dbQueryAgentById(teamId, agentName) ??
+          await this.dbQueryAgentByNameMostRecent(teamId, agentName);
         if (!agent) {
           return { ok: false, error: `Agent "${agentName}" not found` };
         }
@@ -6677,6 +6680,9 @@ export class AgentManagerDb {
 
         // Resolve model alias
         const resolvedModel = resolveModelAlias(newModel);
+
+        const [issue] = validateRuntimeModelCompatibility(agent.runtime, newModel, isCodexReasoningEffort(agent.metadata?.effort) ? agent.metadata.effort : undefined);
+        if (issue) return { ok: false, error: issue.message };
 
         // Update model and mark for restart if running
         const newStatus = agent.status === 'running' ? 'pending' : agent.status;
@@ -7012,6 +7018,7 @@ export class AgentManagerDb {
         // updateStatus, which also marks a running agent for restart — the
         // harness and its flags are only read when the process is spawned.
         let newRuntime: HarnessType | undefined;
+        let renamed: string | undefined;
         let restartRequired = false;
 
         // Parse --wallet, --name, --runtime and --effort flags
@@ -7025,20 +7032,20 @@ export class AgentManagerDb {
             const newName = args[i + 1];
             const nameCheck = validateName(newName, 'agent');
             if (!nameCheck.valid) return { ok: false, error: nameCheck.error };
-            await this.db.agents.updateIdentity(agent.id, { name: newName });
+            renamed = newName;
             newMetadata.alias = newMetadata.alias || agent.name;
             updates.push(`name → ${newName}`);
             i++;
           } else if (args[i] === '--runtime' && args[i + 1]) {
             const runtime = args[i + 1];
-            if (!isHarnessType(runtime)) {
+            if (!isSupportedRuntimeSpecifier(runtime)) {
               return { ok: false, error: `Invalid runtime "${runtime}". Valid: ${HARNESS_TYPES.join(', ')}` };
             }
-            newRuntime = runtime;
+            newRuntime = resolveRuntime(runtime);
             // Runtime is denormalized: the agents row drives spawning, but a
             // copy in metadata is what dashboards read. Write both or the UI
             // keeps reporting the old harness for a correctly-switched agent.
-            newMetadata.runtime = runtime;
+            newMetadata.runtime = newRuntime;
             restartRequired = true;
             updates.push(`runtime → ${runtime}`);
             i++;
@@ -7058,6 +7065,11 @@ export class AgentManagerDb {
           return { ok: false, error: 'Nothing to update. Use --wallet <address>, --name <newname>, --runtime <harness>, or --effort <low|medium|high|xhigh>' };
         }
 
+        if (restartRequired) {
+          const [issue] = validateRuntimeModelCompatibility(newRuntime || agent.runtime, agent.model, isCodexReasoningEffort(newMetadata.effort) ? newMetadata.effort : undefined);
+          if (issue) return { ok: false, error: issue.message };
+        }
+        if (renamed) await this.db.agents.updateIdentity(agent.id, { name: renamed });
         await this.db.agents.updateMetadata(agent.id, newMetadata);
 
         // Runtime lives on the agents row, not in metadata. Mark a running
@@ -8271,6 +8283,7 @@ export class AgentManagerDb {
       ...(agentRow?.runtime && { ID_HARNESS: resolveRuntime(agentRow.runtime) }),
       ID_TEAM: teamName,
       ID_AGENT_PORT: String(port),
+      ...(process.env.ID_WORKSPACE_DIR && { ID_WORKSPACE_DIR: process.env.ID_WORKSPACE_DIR }),
       MANAGER_URL: `http://127.0.0.1:${this.managementPort}`,
       ...(process.env.SQLITE_PATH && { SQLITE_PATH: path.resolve(process.env.SQLITE_PATH) }),
       ID_AGENT_SKIP_PERMISSIONS: skipPermissions ? 'true' : 'false',
@@ -8307,6 +8320,7 @@ export class AgentManagerDb {
     vars: Record<string, string>,
     opts: { hasWallet?: boolean; runtime?: HarnessType | string } = {}
   ): void {
+    if (opts.runtime === 'antigravity-cli') skillNames = [...new Set(['identity', 'inter-agent', ...skillNames])];
     if (skillNames.length === 0) return;
     try {
       const skillsSource = path.resolve(__dirname, '..', 'skills');

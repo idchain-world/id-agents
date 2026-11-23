@@ -26,7 +26,7 @@ describe('resolveModelAlias (spawn CLAUDE_MODEL sites)', () => {
   it('isolates the allocation floor, manager URL and child database', async () => {
     const manager = Object.create(AgentManagerDb.prototype);
     manager.managementPort = 5100;
-    manager.db = { agents: { nextPort: async () => 4101 } };
+    manager.db = { agents: { nextPort: async (base = 4101) => base } };
     try {
       vi.stubEnv('ID_AGENT_PORT_BASE', '5101');
       vi.stubEnv('SQLITE_PATH', '/tmp/scratch.db');

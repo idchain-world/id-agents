@@ -296,7 +296,8 @@ function classifyModelFamily(model: string | undefined): 'claude' | 'openai' | '
 
 export function validateRuntimeModelCompatibility(
   runtime: HarnessType | string | undefined,
-  model: string | undefined
+  model: string | undefined,
+  effort?: string,
 ): RuntimeValidationIssue[] {
   if (!model) return [];
 
@@ -308,7 +309,20 @@ export function validateRuntimeModelCompatibility(
   if (resolvedRuntime === 'cursor-cli') return issues;
 
   if (resolvedRuntime === 'antigravity-cli' && family !== 'gemini') {
-    return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a gemini-* model or neon alias.` }];
+    return [{ code: 'runtime_model_mismatch', message: `Routing "${model}" through Antigravity is not enabled. Select a Gemini model or an Antigravity model alias.` }];
+  }
+  if (resolvedRuntime === 'antigravity-cli') {
+    const slug = resolveModelAlias(model.trim()).toLowerCase();
+    const familyMatch = /^gemini-4-(neon|carbon|argon|hydrogen)(?:-(.*))?$/.exec(slug);
+    if (familyMatch) {
+      const allowed = ['low', 'medium', 'high'];
+      if (['neon', 'hydrogen'].includes(familyMatch[1])) allowed.push('xhigh');
+      if (!allowed.includes(familyMatch[2]) || (effort && !allowed.includes(effort))) {
+        return [{ code: 'invalid_model_effort', message: `${slug} requires an effort suffix supported by ${familyMatch[1]}: ${allowed.join(', ')}` }];
+      }
+    } else if (effort) {
+      return [{ code: 'invalid_model_effort', message: `${slug} does not support an effort override` }];
+    }
   }
   if (resolvedRuntime !== 'antigravity-cli' && family === 'gemini') {
     return [{ code: 'runtime_model_mismatch', message: `Gemini model "${model}" requires runtime "antigravity-cli"` }];
@@ -373,11 +387,12 @@ export function runtimeIssueHint(code: string): string | null {
 
 export function validateRuntimePreflight(
   runtime: HarnessType | string | undefined,
-  model?: string
+  model?: string,
+  effort?: string,
 ): RuntimeValidationIssue[] {
   const resolvedRuntime = resolveRuntime(runtime);
   const issues: RuntimeValidationIssue[] = [
-    ...validateRuntimeModelCompatibility(resolvedRuntime, model),
+    ...validateRuntimeModelCompatibility(resolvedRuntime, model, effort),
   ];
 
   if (resolvedRuntime === 'antigravity-cli') {

@@ -150,7 +150,7 @@ Agents share `~/.id-agents/antigravity` for CLI configuration and conversations.
 
 For API-key mode, set both `ID_AGY_USE_API_KEY=true` and `GEMINI_API_KEY` in the launching environment. The adapter sets `modelProvider` to `gemini` under the root’s `api-key/antigravity-cli/settings.json`. API-key preflight requires `agy --gemini_dir <api-key-directory> models` to exit 0. This probe has been tested with a fake CLI only. Each auth mode resumes conversations from its own directory.
 
-Agents read `AGENTS.md` and skills under `.agents/skills/`. By default the harness passes `--dangerously-skip-permissions`. Setting `dangerouslySkipPermissions: false` selects the CLI’s request-review mode, which can still run shell commands.
+Agents read `AGENTS.md` and skills under `.agents/skills/`. By default the harness passes `--dangerously-skip-permissions`. Setting `dangerouslySkipPermissions: false` passes `--mode accept-edits`.
 
 ## Cursor CLI Harness
 

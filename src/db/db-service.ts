@@ -125,7 +125,7 @@ export interface AgentsRepository {
    * Returns the next available port (max port across all claude agents + 1,
    * starting at 4101 if no agents exist).
    */
-  nextPort(): Promise<number>;
+  nextPort(base?: number): Promise<number>;
 
   /** Count non-deleted agents in a team. Returns count as a string. */
   count(teamId: string): Promise<string>;

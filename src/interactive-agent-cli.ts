@@ -357,6 +357,24 @@ let lastAskedAgent: string | null = null;
 // Manager URL - derived from MANAGER_PORT
 const MANAGER_URL = process.env.MANAGER_URL || `http://localhost:${MANAGER_PORT}`;
 
+if (process.argv[2] === 'spawn') {
+  const { IdAgentsCLI, runSpawn } = await import('./id-agents-cli.js');
+  try {
+    const agent = await runSpawn(new IdAgentsCLI(MANAGER_URL), process.argv.slice(3));
+    const response = await managerFetch('/remote', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: `/agent ${agent.id} start` }),
+    });
+    const result: any = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.error || 'Agent start failed');
+    console.log(`Started ${agent.name} (${agent.id}) on port ${agent.port}`);
+    process.exit(0);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+}
+
 // ==================== Agent Display Helpers ====================
 
 /**
@@ -4524,12 +4542,12 @@ async function deployFromConfig(filePath: string, args: string[] = []) {
             ID_TEAM: activeTeam,
             ID_AGENT_PORT: String(result.port),
             MANAGER_URL: MANAGER_URL,
-            ...(agent.runtime && { ID_HARNESS: agent.runtime }),
+            ...(agent.runtime && { ID_HARNESS: resolveRuntime(agent.runtime) }),
             ID_DB_TEAM_ID: result.teamId,
             ID_DB_AGENT_ID: result.id,
             ID_SHARED_DIR: result.sharedDirectory,
             ...(isAntigravity && agent.effort && { ID_AGENT_EFFORT: agent.effort }),
-            ...(agent.model && { CLAUDE_MODEL: resolveModelAlias(agent.model) }),
+            ...(result.model && { CLAUDE_MODEL: resolveModelAlias(result.model) }),
             ...((agent.verbose === true || agent.verbose === 'true') && { ID_AGENT_VERBOSE: 'true' }),
             // Default to skip-permissions; honor explicit false from config
             ID_AGENT_SKIP_PERMISSIONS: agent.dangerouslySkipPermissions === false ? 'false' : 'true'

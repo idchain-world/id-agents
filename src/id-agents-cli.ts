@@ -6,9 +6,10 @@
  */
 
 import fetch from 'node-fetch';
+import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
-const MANAGER_URL = process.env.ID_MANAGER_URL || 'http://localhost:3100';
+const MANAGER_URL = process.env.ID_MANAGER_URL || process.env.MANAGER_URL || 'http://localhost:3100';
 
 interface Agent {
   id: string;
@@ -33,12 +34,13 @@ export class IdAgentsCLI {
   async spawn(options: {
     name: string;
     model?: string;
+    runtime?: string;
     allowedTools?: string[];
     pluginPath?: string;
   }): Promise<Agent> {
     const response = await fetch(`${this.managerUrl}/agents/spawn`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Id-Team': process.env.ID_TEAM || process.env.ID_PROJECT || 'default' },
       body: JSON.stringify(options)
     });
 
@@ -146,6 +148,15 @@ export class IdAgentsCLI {
   }
 }
 
+export async function runSpawn(cli: IdAgentsCLI, args: string[]): Promise<Agent> {
+  const { positionals, values: { runtime } } = parseArgs({
+    args, allowPositionals: true, options: { runtime: { type: 'string' } },
+  });
+  const [name, model, pluginPath] = positionals;
+  if (!name || positionals.length > 3) throw new Error('Usage: id-agents spawn <name> [model] [plugin-path] [--runtime <id>]');
+  return cli.spawn({ name, model, pluginPath, runtime });
+}
+
 // CLI command handler
 async function main() {
   const args = process.argv.slice(2);
@@ -156,21 +167,11 @@ async function main() {
   try {
     switch (command) {
       case 'spawn':
-        const name = args[1];
-        const model = args[2];
-        const pluginPath = args[3];
-        if (!name) {
-          console.error('Usage: id-agents spawn <name> [model] [plugin-path]');
-          process.exit(1);
-        }
-        const agent = await cli.spawn({ name, model, pluginPath });
+        const agent = await runSpawn(cli, args.slice(1));
         console.log(`✅ Agent spawned: ${agent.name}`);
         console.log(`   ID: ${agent.id}`);
         console.log(`   URL: ${agent.url}`);
         console.log(`   Model: ${agent.model}`);
-        if (pluginPath) {
-          console.log(`   Plugin: ${pluginPath}`);
-        }
         break;
 
       case 'register':
@@ -214,7 +215,7 @@ async function main() {
 ID Agents CLI
 
 Usage:
-  id-agents spawn <name> [model] [plugin-path] - Spawn a new local agent
+  id-agents spawn <name> [model] [plugin-path] [--runtime <id>] - Spawn a new local agent
   id-agents register <name> <endpoint> - Register a virtual agent (external endpoint)
   id-agents list                       - List all agents
   id-agents stop <agent-id>            - Stop an agent

@@ -6,6 +6,8 @@
 // overflow the column — that's a feature, not a bug, because it makes
 // missing entries obvious.
 
+import { resolveModelAlias } from '../../core/model-aliases.js';
+
 export const MODEL_ABBREVIATIONS: Record<string, string> = {
   // Anthropic Claude
   'claude-opus-4-20250514': 'opus-4-0',
@@ -28,17 +30,31 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
   'sonnet': 'sonn-5.5',
 
   // Antigravity
-  'neon': 'neon-4 high',
-  'neon-4': 'neon-4 high',
-  'neon4': 'neon-4 high',
-  'neon-low': 'neon-4 low',
-  'neon-medium': 'neon-4 medium',
-  'neon-high': 'neon-4 high',
-  'neon-xhigh': 'neon-4 xhigh',
-  'gemini-4-neon-high': 'neon-4 high',
-  'gemini-4-neon-low': 'neon-4 low',
-  'gemini-4-neon-medium': 'neon-4 medium',
-  'gemini-4-neon-xhigh': 'neon-4 xhigh',
+  'neon': 'neon4-hi',
+  'neon-4': 'neon4-hi',
+  'neon4': 'neon4-hi',
+  'neon-low': 'neon4-lo',
+  'neon-medium': 'neon4-med',
+  'neon-high': 'neon4-hi',
+  'neon-xhigh': 'neon4-xhi',
+  'gemini-4-neon-high': 'neon4-hi',
+  'gemini-4-neon-low': 'neon4-lo',
+  'gemini-4-neon-medium': 'neon4-med',
+  'gemini-4-neon-xhigh': 'neon4-xhi',
+
+  'gemini-4-carbon-low': 'car4-lo',
+  'gemini-4-carbon-medium': 'car4-med',
+  'gemini-4-carbon-high': 'car4-hi',
+  'gemini-4-argon-low': 'arg4-lo',
+  'gemini-4-argon-medium': 'arg4-med',
+  'gemini-4-argon-high': 'arg4-hi',
+  'gemini-4-hydrogen-low': 'hyd4-lo',
+  'gemini-4-hydrogen-medium': 'hyd4-med',
+  'gemini-4-hydrogen-high': 'hyd4-hi',
+  'gemini-4-hydrogen-xhigh': 'hyd4-xhi',
+  'gemini-pro-orchestrator-neon': 'orch-neo',
+  'gemini-pro-orchestrator': 'orch-car',
+  'gemini-pro-orchestrator-argon': 'orch-arg',
 
   // OpenAI Codex
   'gpt-6.2-astra': 'astra-6.2',
@@ -95,5 +111,5 @@ export const MODEL_ABBREVIATIONS: Record<string, string> = {
  */
 export function abbrevModel(model: string | undefined): string {
   if (!model) return '—';
-  return MODEL_ABBREVIATIONS[model] ?? model;
+  return MODEL_ABBREVIATIONS[model] ?? MODEL_ABBREVIATIONS[resolveModelAlias(model)] ?? model;
 }

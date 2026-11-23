@@ -613,7 +613,8 @@ export function validateConfig(config: DeployConfig): ValidationResult {
     }
 
     const effectiveRuntime = resolveRuntime(agent.runtime || defaultRuntime);
-    const effectiveModel = agent.model || config.defaults?.model;
+    const inheritModel = effectiveRuntime !== 'antigravity-cli' || effectiveRuntime === defaultRuntime;
+    const effectiveModel = agent.model || (inheritModel ? config.defaults?.model : undefined);
     if (agent.effort !== undefined) {
       if (!isCodexReasoningEffort(agent.effort)) {
         errors.push({
@@ -627,7 +628,7 @@ export function validateConfig(config: DeployConfig): ValidationResult {
         });
       }
     }
-    for (const issue of validateRuntimeModelCompatibility(effectiveRuntime, effectiveModel)) {
+    for (const issue of validateRuntimeModelCompatibility(effectiveRuntime, effectiveModel, agent.effort || config.defaults?.effort)) {
       errors.push({
         path: agent.model ? `${agentPath}.model` : `${agentPath}.runtime`,
         message: issue.message
@@ -674,7 +675,7 @@ export function validateConfig(config: DeployConfig): ValidationResult {
       });
     }
 
-    for (const issue of validateRuntimeModelCompatibility(defaultRuntime, config.defaults.model)) {
+    for (const issue of validateRuntimeModelCompatibility(defaultRuntime, config.defaults.model, config.defaults.effort)) {
       errors.push({
         path: config.defaults.model ? 'defaults.model' : 'defaults.runtime',
         message: issue.message
@@ -1255,7 +1256,7 @@ export function mergeDefaults(agent: AgentSpec, defaults: DeployConfig['defaults
   }
 
   // Model: agent overrides defaults
-  if (!merged.model && defaults.model) {
+  if (!merged.model && defaults.model && (resolveRuntime(merged.runtime) !== 'antigravity-cli' || resolveRuntime(defaults.runtime) === 'antigravity-cli')) {
     merged.model = defaults.model;
   }
 

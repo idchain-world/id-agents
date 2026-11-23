@@ -9,20 +9,24 @@ import type { AgentHarness, HarnessMessage, HarnessOptions } from './types.js';
 
 export function buildAntigravityArgs(prompt: string, options: HarnessOptions, dir: string, skipPermissions: boolean) {
   const requested = options.model || 'neon';
-  const [issue] = validateRuntimeModelCompatibility('antigravity-cli', requested);
+  const [issue] = validateRuntimeModelCompatibility('antigravity-cli', requested, options.effort);
   if (issue) throw new Error(issue.message);
   let model = resolveModelAlias(requested.trim()).toLowerCase();
-  if (model === 'gemini-4-neon') {
-    throw new Error('gemini-4-neon requires an effort suffix. Use neon or gemini-4-neon-high.');
-  }
   if (options.effort && model.startsWith('gemini-4-')) {
     model = model.replace(/-(low|medium|high|xhigh)$/, '-' + options.effort);
   }
   const args = ['--gemini_dir', dir, '--model', model, '--output-format', 'stream-json'];
   if (options.resume) args.push('--conversation', options.resume);
   if (skipPermissions) args.push('--dangerously-skip-permissions');
+  else args.push('--mode', 'accept-edits');
   args.push('-p=' + prompt);
   return args;
+}
+
+function queryError(message: string): string {
+  return /please sign in|authentication required/i.test(message)
+    ? message + ' Run agy once in a terminal on the host to sign in.'
+    : message;
 }
 
 export async function* parseAntigravityStream(lines: AsyncIterable<string>, resume?: string): AsyncGenerator<HarnessMessage> {
@@ -32,7 +36,14 @@ export async function* parseAntigravityStream(lines: AsyncIterable<string>, resu
   let session: string | undefined;
   for await (const line of lines) {
     let event;
-    try { event = JSON.parse(line); } catch { continue; }
+    try { event = JSON.parse(line); } catch {
+      const error = queryError(line);
+      if (error !== line) {
+        yield { type: 'error', content: error };
+        return;
+      }
+      continue;
+    }
     if (!event) continue;
     const id = event.conversation_id || event.result?.conversation_id;
     if (id && id !== session) {
@@ -64,11 +75,11 @@ export async function* parseAntigravityStream(lines: AsyncIterable<string>, resu
     } else if (event.event === 'result') {
       const result = event.result;
       if (result?.status !== 'SUCCESS') {
-        yield { type: 'error', content: result?.error || 'agy reported an unsuccessful result' };
+        yield { type: 'error', content: queryError(result?.error || 'agy reported an unsuccessful result'), usage: result?.usage };
       } else if (typeof result.response !== 'string' || !result.response.trim()) {
         yield { type: 'error', content: 'agy returned SUCCESS with an empty response' };
       } else {
-        yield { type: 'result', result: result.response, content: result.response, session_id: session };
+        yield { type: 'result', result: result.response, usage: result.usage, content: result.response, session_id: session };
       }
       return;
     }
@@ -102,7 +113,7 @@ export class AntigravityCliHarness implements AgentHarness {
     const args = buildAntigravityArgs(prompt, options, dir, skip);
     const cwd = options.workingDirectory;
     this.version ??= spawnSync(binary, ['--version'], { cwd, env, encoding: 'utf8', timeout: 5000 }).stdout?.trim() || binary;
-    console.log(`[Antigravity] ${this.version}, model=${args[3]}, permissions=${skip ? 'always-proceed' : 'request-review'}`);
+    console.log(`[Antigravity] ${this.version}, model=${args[3]}, permissions=${skip ? 'always-proceed' : 'accept-edits'}`);
     const proc = spawn(binary, args, { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let diagnostic = '';
     proc.stderr.setEncoding('utf8').on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-4096); });
@@ -147,7 +158,7 @@ export class AntigravityCliHarness implements AgentHarness {
         return;
       }
       const exit = await completion;
-      yield { type: 'error', content: `agy closed (${exit}) without a result event${diagnostic ? ': ' + diagnostic.trim() : ''}` };
+      yield { type: 'error', content: queryError(`agy closed (${exit}) without a result event${diagnostic ? ': ' + diagnostic.trim() : ''}`) };
     } finally {
       lines.close();
       if (terminal) {

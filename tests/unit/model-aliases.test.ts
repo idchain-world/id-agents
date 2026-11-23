@@ -245,7 +245,7 @@ describe('TUI runtime abbreviations', () => {
     expect(abbrevRuntime('claude-code-cli')).toBe('claude');
     expect(abbrevRuntime('cursor-cli')).toBe('cursor');
     expect(abbrevRuntime('antigravity-cli')).toBe('antigravity');
-    expect(abbrevModel('gemini-4-neon-high')).toBe('neon-4 high');
+    expect(abbrevModel('gemini-4-neon-high')).toBe('neon4-hi');
     expect(abbrevRuntime('codex')).toBe('codex');
     expect(abbrevRuntime(undefined)).toBe('—');
     expect(abbrevRuntime('experimental-runtime')).toBe('experimental-runtime');
