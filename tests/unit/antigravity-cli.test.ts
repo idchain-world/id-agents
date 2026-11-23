@@ -63,8 +63,8 @@ it('constructs isolated args, preserving a dash-prefixed multiline prompt', () =
   expect(() => buildAntigravityArgs('hello', { model: 'astra' }, '/dir', true)).toThrow(/not enabled/);
 });
 
-it('strips Orca variables and requires explicit key opt-in', () => {
-  expect(antigravityEnvironment({ HOME: '/home', ORCA_ID: '1', ORCA_URL: 'x', GEMINI_API_KEY: 'key' })).toEqual({ HOME: '/home' });
+it('requires explicit key opt-in', () => {
+  expect(antigravityEnvironment({ HOME: '/home', GEMINI_API_KEY: 'key' })).toEqual({ HOME: '/home' });
   const root = mkdtempSync(join(tmpdir(), 'agy-auth-'));
   try {
     const env = { ID_AGY_GEMINI_DIR: root, ID_AGY_USE_API_KEY: 'true', GEMINI_API_KEY: 'test' };

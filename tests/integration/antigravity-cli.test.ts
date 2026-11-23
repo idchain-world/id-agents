@@ -30,11 +30,11 @@ it('runs the fixture through the registered harness and resumes the reported ses
   fake(`
     const fs = require('node:fs');
     fs.writeFileSync('args', JSON.stringify(process.argv.slice(2)));
-    if (process.env.ORCA_TEST || fs.readFileSync(0).length) process.exit(2);
+    if (fs.readFileSync(0).length) process.exit(2);
     fs.createReadStream(process.env.FIXTURE, {highWaterMark: 7}).pipe(process.stdout);
   `);
   const harness = createHarness('antigravity-cli');
-  const env = { ORCA_TEST: 'strip', FIXTURE: fileURLToPath(new URL('../fixtures/antigravity/tool-read.ndjson', import.meta.url)) };
+  const env = { FIXTURE: fileURLToPath(new URL('../fixtures/antigravity/tool-read.ndjson', import.meta.url)) };
   const events = [];
   for await (const event of harness.run('first', { workingDirectory: dir, env })) events.push(event);
   const session = events[0].session_id;

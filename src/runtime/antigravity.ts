@@ -8,9 +8,6 @@ import { randomUUID } from 'node:crypto';
 
 export function antigravityEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...source };
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('ORCA_')) delete env[key];
-  }
   if (env.ID_AGY_USE_API_KEY !== 'true') delete env.GEMINI_API_KEY;
   return env;
 }
