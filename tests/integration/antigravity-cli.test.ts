@@ -16,6 +16,7 @@ beforeEach(() => {
   vi.stubEnv('ID_AGY_USE_API_KEY', 'false');
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   rmSync(dir, { recursive: true, force: true });
 });
@@ -102,10 +103,26 @@ it('checks /usage in the isolated directory and diagnoses auth, flag and binary 
   fake(`if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(['--gemini_dir', process.env.ID_AGY_GEMINI_DIR, '--output-format', 'json', '-p=/usage'])) process.exit(1);
     console.log('{"status":"SUCCESS"}');`);
   expect(validateRuntimePreflight('antigravity')).toEqual([]);
+  const now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 59_000);
+  expect(validateRuntimePreflight('antigravity')).toEqual([]);
+  expect(readFileSync(join(dir, 'version-calls'), 'utf8')).toBe('1');
+  clock.mockReturnValue(now + 60_000);
   fake("console.log('{\"status\":\"ERROR\"}'); process.exitCode = 1;");
   expect(validateRuntimePreflight('antigravity')[0].message).toMatch(/run agy once in a terminal/i);
   fake("console.error('flag provided but not defined: --gemini_dir'); process.exitCode = 2;");
   expect(validateRuntimePreflight('antigravity')[0].message).toMatch(/rejected --gemini_dir/);
   vi.stubEnv('AGY_PATH', join(dir, 'missing'));
   expect(validateRuntimePreflight('antigravity')[0].code).toBe('runtime_binary_missing');
+});
+
+it('checks models by exit status in the isolated API-key directory', () => {
+  vi.stubEnv('ID_AGY_USE_API_KEY', 'true');
+  vi.stubEnv('GEMINI_API_KEY', 'test');
+  fake(`const args = process.argv.slice(2);
+    if (JSON.stringify(args) !== JSON.stringify(['--gemini_dir', process.env.ID_AGY_GEMINI_DIR + '/api-key', 'models'])) process.exit(2);
+    console.log('model list');`);
+  expect(validateRuntimePreflight('antigravity')).toEqual([]);
+  vi.stubEnv('ID_AGY_USE_API_KEY', 'false');
+  expect(validateRuntimePreflight('antigravity')).toHaveLength(1);
 });

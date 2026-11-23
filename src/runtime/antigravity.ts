@@ -43,16 +43,27 @@ export function prepareAntigravityDirectory(env: NodeJS.ProcessEnv): string {
   return dir;
 }
 
+const preflightExpiry = new Map<string, number>();
+
 export function checkAntigravityPreflight(): RuntimeValidationIssue[] {
   const env = antigravityEnvironment(process.env);
   const binary = env.AGY_PATH || 'agy';
-  const version = spawnSync(binary, ['--version'], { env, encoding: 'utf8', timeout: 10000 });
-  if (version.status !== 0) {
-    return [{ code: 'runtime_binary_missing', message: `Cannot run ${binary} --version. Install agy and run agy once in a terminal to sign in.` }];
-  }
   try {
     const dir = prepareAntigravityDirectory(env);
-    const probe = spawnSync(binary, ['--gemini_dir', dir, '--output-format', 'json', '-p=/usage'], {
+    const apiKeyMode = env.ID_AGY_USE_API_KEY === 'true';
+    const cacheKey = JSON.stringify([binary, dir, apiKeyMode]);
+    const now = Date.now();
+    for (const [key, expires] of preflightExpiry) {
+      if (expires <= now) preflightExpiry.delete(key);
+    }
+    if (preflightExpiry.has(cacheKey)) return [];
+
+    const version = spawnSync(binary, ['--version'], { env, encoding: 'utf8', timeout: 10000 });
+    if (version.status !== 0) {
+      return [{ code: 'runtime_binary_missing', message: `Cannot run ${binary} --version. Install agy and run agy once in a terminal to sign in.` }];
+    }
+    const command = apiKeyMode ? ['models'] : ['--output-format', 'json', '-p=/usage'];
+    const probe = spawnSync(binary, ['--gemini_dir', dir, ...command], {
       env, encoding: 'utf8', timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
     });
     const output = `${probe.stderr || ''} ${probe.stdout || ''}`;
@@ -60,7 +71,11 @@ export function checkAntigravityPreflight(): RuntimeValidationIssue[] {
       return [{ code: 'antigravity_config_unsupported', message: 'agy rejected --gemini_dir. Install a version that supports isolated configuration.' }];
     }
     if (probe.error) throw probe.error;
-    if (probe.status === 0 && JSON.parse(probe.stdout)?.status === 'SUCCESS') return [];
+    if (probe.status === 0 && (apiKeyMode || JSON.parse(probe.stdout)?.status === 'SUCCESS')) {
+      preflightExpiry.set(cacheKey, Date.now() + 60_000);
+      return [];
+    }
+    if (apiKeyMode) return [{ code: 'antigravity_auth_missing', message: 'Antigravity models failed. Check GEMINI_API_KEY.' }];
     return [{ code: 'antigravity_auth_missing', message: 'Antigravity /usage failed. Run agy once in a terminal to sign in.' }];
   } catch (error) {
     return [{ code: 'antigravity_preflight_failed', message: `Antigravity preflight failed: ${error instanceof Error ? error.message : error}. Check configuration and run agy once in a terminal to sign in.` }];

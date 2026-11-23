@@ -146,9 +146,9 @@ Codex currently runs each request as a fresh `codex exec` invocation. It does no
 
 Run `agy` once in a terminal to sign in. Choose `runtime: antigravity-cli` (alias `antigravity`) and `model: neon`. The default model resolves to `gemini-4-neon-high`. An explicit `effort` replaces the effort suffix on Gemini 4 models. Claude, GPT and Grok routing through this harness is disabled.
 
-Agents share `~/.id-agents/antigravity` for CLI configuration and conversations. Override the root with an absolute `ID_AGY_GEMINI_DIR`, or set `AGY_PATH` to select the executable. Preflight requires support for `--gemini_dir` and a successful `/usage` response. This directory isolates agents from personal Orca hooks. Subscription quota is shared across agents on the account.
+Agents share `~/.id-agents/antigravity` for CLI configuration and conversations. Override the root with an absolute `ID_AGY_GEMINI_DIR`, or set `AGY_PATH` to select the executable. Preflight requires support for `--gemini_dir` and a successful `/usage` response in subscription mode. The separate directory isolates agents from user-level hooks in `~/.gemini/config/hooks.json`. Subscription quota is shared across agents on the account.
 
-For API-key mode, set both `ID_AGY_USE_API_KEY=true` and `GEMINI_API_KEY` in the launching environment. The adapter sets `modelProvider` to `gemini` under the root’s `api-key/antigravity-cli/settings.json`. Each auth mode resumes conversations from its own directory.
+For API-key mode, set both `ID_AGY_USE_API_KEY=true` and `GEMINI_API_KEY` in the launching environment. The adapter sets `modelProvider` to `gemini` under the root’s `api-key/antigravity-cli/settings.json`. API-key preflight requires `agy --gemini_dir <api-key-directory> models` to exit 0. This probe has been tested with a fake CLI only. Each auth mode resumes conversations from its own directory.
 
 Agents read `AGENTS.md` and skills under `.agents/skills/`. By default the harness passes `--dangerously-skip-permissions`. Setting `dangerouslySkipPermissions: false` selects the CLI’s request-review mode, which can still run shell commands.
 
