@@ -21,7 +21,7 @@ This skill enables Claude Code to act as an **admin agent** for the ID Agents ma
 
 | Goal | Command | Notes |
 |---|---|---|
-| Add a new agent | `id-agents spawn <name> [model]`, or `POST /agents/spawn` | The database is the source of truth — editing YAML does NOT add an agent. `/agents rebuild` will not pick it up either. There is no `/agents spawn`. |
+| Add a new agent | `id-agents spawn <name> [model] [--runtime <id>]`, or `POST /agents/spawn` | The database is the source of truth — editing YAML does NOT add an agent. `/agents rebuild` will not pick it up either. There is no `/agents spawn`. |
 | Change a model | `/model <agent> <model>` | Surgical commands only. `/sync` is REMOVED: a config file may no longer overwrite the database. |
 | Remove an agent | `/delete <agent>` | Hard-deletes the row and stops the process. |
 | Restart agents (no config change) | `/agents rebuild` | restarts existing agents from DB |
@@ -313,7 +313,7 @@ The wake message contains **no work instructions**. The agent must read `HEARTBE
 1. Pick (or create) a dedicated working directory for the agent. If the agent will operate on another repo, it can do so via absolute paths from this dir.
 2. Write `HEARTBEAT.md` at that directory's root. The file IS the algorithm; describe exactly what to read, what to do, how much to do per beat (one item, a batch of N, until a wall-clock budget, etc.), and what one-line reply to send. Tell the agent to re-read `HEARTBEAT.md` from disk every beat (mirroring the manager's wake message).
 3. Add the agent to the team YAML with `workingDirectory:` pointing at that dir and `heartbeat: <seconds>`.
-4. `id-agents spawn <name> [model]` (or `POST /agents/spawn`) for a live team, or `/deploy <team>` for a NEW one (deploy is create-only).
+4. `id-agents spawn <name> [model] [--runtime <id>]` (or `POST /agents/spawn`) for a live team, or `/deploy <team>` for a NEW one (deploy is create-only).
 5. Verify with `/heartbeat <agent>`: `intervalSeconds` set, `scheduleActive: true`. The first beat fires inside the interval.
 
 ### Anti-patterns
@@ -372,6 +372,8 @@ ls "$(jq -r '.libraryRoot' <<<"$(curl -sS $MGR/library/agents)")/agents"
 ```
 
 ### Adding an agent to a team
+
+**Antigravity agents.** Run `agy` once on the host to sign in with Google. Use `--runtime antigravity-cli` (alias `antigravity`) for Antigravity Gemini IDs. The default model is `neon`. Alias families are `neon`, `carbon`, `argon`, `hydrogen`, and `orchestrator`. For example, run `id-agents spawn analyst --runtime antigravity` or send `{"name":"analyst","runtime":"antigravity-cli","model":"neon"}` to `POST /agents/spawn`. After an HTTP spawn, run `/agent <returned-id> start`.
 
 1. **Edit the team YAML** under `id-agents/configs/<team>.yaml`. Add an entry under `agents:`.
 

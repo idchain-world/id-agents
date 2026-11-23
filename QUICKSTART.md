@@ -22,7 +22,7 @@ Follow these steps to find or refresh your local `id-agents` checkout, then depl
   npm install -g @openai/codex
   codex login
   ```
-- **Antigravity CLI** (optional) — install `agy`, then run `agy` once in a terminal to sign in with Google. Set `runtime: antigravity-cli` and `model: neon` on the agent. Preflight checks the sign-in with `/usage`.
+- **Antigravity CLI** (optional) — install `agy` for Antigravity agents.
 - **Cursor Agent CLI** (optional) — only if you want Cursor agents:
   ```bash
   curl https://cursor.com/install -fsS | bash
@@ -188,6 +188,10 @@ curl -s -X POST http://localhost:4100/remote \
 ```
 
 > **Troubleshooting:** If agents show `status: error` after deploy, check the manager's terminal output for the actual error message. Agent log files are at `workspace/logs/local-<name>-*.log`.
+
+### Add an Antigravity agent to the running team
+
+Run `agy` once on the host to sign in with Google. Use `--runtime antigravity-cli` (alias `antigravity`) for Antigravity Gemini IDs. The default model is `neon`. Alias families are `neon`, `carbon`, `argon`, `hydrogen`, and `orchestrator`. Ask your connected coding agent to use `id-agents spawn <name> [model] [--runtime <id>]`. For example, run `id-agents spawn analyst --runtime antigravity` or send `{"name":"analyst","runtime":"antigravity-cli","model":"neon"}` to `POST /agents/spawn`. After an HTTP spawn, run `/agent <returned-id> start`.
 
 ## 5. Talk to Your Agents
 
